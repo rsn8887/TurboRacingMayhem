@@ -1,4 +1,5 @@
 # background layers of DESERT CANYON, back to front: layer  x y w h  parallax  yOffset
 layer  1 327 2048 120  0.03 -100
+layer  1 448 2048 120  0.02 -110
 layer  1 1 2048 180  0.08 0
 layer  1 182 2048 144  0.2 0

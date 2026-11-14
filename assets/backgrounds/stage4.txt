@@ -1,4 +1,4 @@
 # background layers of ALPINE PASS, back to front: layer  x y w h  parallax  yOffset
-layer  1 262 2048 180  0.04 -80
+layer  1 262 2048 220  0.04 -86
 layer  1 1 2048 260  0.08 0
-layer  1 443 2048 120  0.2 0
+layer  1 483 2048 120  0.2 0

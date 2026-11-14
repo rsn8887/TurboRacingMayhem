@@ -5,7 +5,7 @@
 
 Audio audio;
 
-static const double SHOT_LEN[] = {0.18, 0.45, 1.0, 0.18, 0.36, 0.04, 0.12, 1.2, 0.3, 1.1};
+static const double SHOT_LEN[] = {0.18, 0.45, 1.0, 0.18, 0.36, 0.04, 0.12, 1.2, 0.3, 1.1, 0.4};
 
 float Audio::rnd() {
     noise_ ^= noise_ << 13; noise_ ^= noise_ >> 17; noise_ ^= noise_ << 5;
@@ -17,7 +17,12 @@ bool Audio::init() {
     want.freq = 44100;
     want.format = AUDIO_S16SYS;
     want.channels = 2;
+#ifdef __SWITCH__
+    // all three game cores render in parallel: a longer buffer (~46 ms) rides out a slow frame without a gap
+    want.samples = 2048;
+#else
     want.samples = 1024;
+#endif
     want.callback = &Audio::callback;
     want.userdata = this;
     dev_ = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
@@ -175,6 +180,17 @@ void Audio::mix(float* out, int n) {
                 sh.lp2 += (sh.lp - sh.lp2) * 0.04;
                 double att = std::min(1.0, t / 0.05) * env * env;
                 v = (sh.lp - sh.lp2) * 1.6 * att + std::sin(tau * (60 + t * 90) * t) * 0.35 * att;
+                break;
+            }
+            case SFX_TUMBLEWEED: {   // dry twigs snapping: a soft thump, a burst of crackles and a papery rustle
+                double nz = rnd();
+                sh.lp += (nz - sh.lp) * 0.35;
+                double hiss = nz - sh.lp;                                     // high-passed: dry and papery
+                double crackle = 0;
+                if (rnd() > 0.88 - 0.1 * env) crackle = rnd() * 1.4;          // sparse snaps, thicker at first
+                sh.lp2 += (crackle - sh.lp2) * 0.6;                           // each snap a short click
+                double thump = std::sin(tau * (140 - t * 120) * t) * std::exp(-t * 28);
+                v = hiss * 0.35 * env * env + (crackle - sh.lp2) * 0.55 * env + thump * 0.45;
                 break;
             }
             }

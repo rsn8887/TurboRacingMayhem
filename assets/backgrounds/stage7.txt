@@ -1,5 +1,5 @@
 # background layers of HYPERION 2099, back to front: layer  x y w h  parallax  yOffset
-layer  1 583 2048 180  0.04 -80
+layer  1 583 2048 220  0.04 -86
 layer  1 1 2048 340  0.02 -40
 layer  1 342 2048 240  0.06 0
-layer  1 764 2048 160  0.15 0
+layer  1 804 2048 160  0.15 0

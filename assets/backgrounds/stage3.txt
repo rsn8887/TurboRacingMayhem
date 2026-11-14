@@ -1,4 +1,6 @@
 # background layers of NEON NIGHT, back to front: layer  x y w h  parallax  yOffset
 layer  1 1 2048 340  0.02 -60
-layer  1 342 2048 220  0.06 0
-layer  1 563 2048 160  0.15 0
+layer  1 342 2048 340  0.02 -50
+layer  1 683 2048 240  0.04 0
+layer  1 924 2048 200  0.08 0
+layer  1 1125 2048 160  0.15 0

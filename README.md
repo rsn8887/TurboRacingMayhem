@@ -1,6 +1,6 @@
 # Turbo Racing Mayhem
 
-A pseudo-3D arcade racer in the style of Outrun and Lotus Esprit Turbo Challenge, written in C++17 with SDL2. It has 11 stages (from a palm-lined coast to a chequerboard road in a sci-fi city, a rainbow road in Rio, Paris, the Autobahn and Florence), 6 car types, 20 cars per race, championship and single-race modes, three difficulty levels for the CPU drivers (Easy, Medium, Hard) and 2-player split screen.
+A pseudo-3D arcade racer in the style of Outrun and Lotus Esprit Turbo Challenge, written in C++17 with SDL2. It has 11 stages (from a palm-lined coast to a chequerboard road in a sci-fi city, a rainbow road in Rio, Paris, the Autobahn and Florence) with their own roadside scenery and touches like desert tumbleweeds and carnival confetti, 6 car types, 20 cars per race, championship and single-race modes, three difficulty levels for the CPU drivers (Easy, Medium, Hard) and 2-player split screen.
 
 ![title screen](screenshot_title.png)
 

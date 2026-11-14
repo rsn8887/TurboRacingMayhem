@@ -7,6 +7,7 @@
 #include <random>
 #include <algorithm>
 #include <array>
+#include <functional>
 
 namespace {
 constexpr int SS = 4;
@@ -236,31 +237,63 @@ Bitmap makeBillboard(int kind) {
 }
 
 Bitmap makeBuilding(int kind) {
+    // night-city block: ledges every few floors, windows lit floor by floor (some dark, some with blinds or a
+    // flicker of TV blue), lit windows on the shaded side too, rooftop water tank, aircraft light, a lit lobby
+    // and its sign (NEON or HOTEL). Only hashed noise is used: no random numbers are drawn.
     int w = kind == 0 ? 92 : 124, h = kind == 0 ? 224 : 172;
-    Painter p(w, h, SS, RENDER_SCALE, 2, 10);   // margins keep the outline from being cut off
-    Color wall0 = kind == 0 ? rgb(70, 70, 120) : rgb(100, 56, 100), wall1 = kind == 0 ? rgb(30, 30, 60) : rgb(50, 26, 54);
-    double side = w * 0.18;
-    p.rect(0, 12, w - side, h - 12, vgrad(12, h, wall0, wall1));                       // front face
-    p.poly({double(w) - side, 12, double(w), 4, double(w), double(h), double(w) - side, double(h)},
-           vgrad(4, h, shade(wall0, 0.6), shade(wall1, 0.6)));                           // side face
-    p.poly({0, 12, side, 4, double(w), 4, double(w) - side, 12}, shade(wall0, 1.3));      // roof
-    p.rect(w * 0.3, 0, 2, 8, rgb(150, 150, 170));                                        // antenna
-    p.ellipse(w * 0.3 + 1, 0.5, 1.5, 1.5, rgb(255, 40, 40));
-    for (double y = 22; y < h - 14; y += 11)
-        for (double x = 7; x < w - side - 8; x += 11) {
+    Painter p(w, h, SS, RENDER_SCALE, 2, 16);   // margins keep the outline and rooftop bits from being cut off
+    Color wall0 = kind == 0 ? rgb(74, 74, 126) : rgb(104, 58, 104), wall1 = kind == 0 ? rgb(30, 30, 62) : rgb(50, 26, 56);
+    double side = w * 0.18, fw = w - side;
+    p.rect(0, 12, fw, h - 12, Paint([=](double x, double y) {                // front face, with subtle panel lines
+        Color c = lerpColor(wall0, wall1, (y - 12) / (h - 12));
+        if (std::fmod(x, 11.0) < 0.5) c = shade(c, 0.9);
+        return c;
+    }));
+    p.poly({fw, 12, double(w), 4, double(w), double(h), fw, double(h)}, vgrad(4, h, shade(wall0, 0.58), shade(wall1, 0.58)));   // side face
+    p.poly({0, 12, side, 4, double(w), 4, fw, 12}, shade(wall0, 1.3));         // roof
+    // windows on the front: floors lit or dark as a whole, a few exceptions
+    for (double y = 22; y < h - 22; y += 11) {
+        double fl = hashNoise(y * 0.5 + kind * 13, 1.7);
+        bool floorLit = fl < 0.6;
+        for (double x = 7; x < fw - 8; x += 11) {
             double r = hashNoise(x * 7 + kind, y * 3);
-            if (r < 0.45) {
-                Color c = r < 0.38 ? rgb(255, 214, 110) : rgb(140, 220, 255);
-                p.rect(x, y, 6, 7, vgrad(y, y + 7, c, shade(c, 0.75)));
-                glow(p, x + 3, y + 3.5, 6, 6, c, 0.35);
-            } else p.rect(x, y, 6, 7, rgb(24, 22, 40));
+            bool on = floorLit ? r < 0.82 : r < 0.12;
+            if (on) {
+                Color c = r < 0.55 ? rgb(255, 214, 110) : r < 0.75 ? rgb(255, 236, 190) : r < 0.82 ? rgb(140, 220, 255) : rgb(120, 160, 255);
+                p.rect(x, y, 6, 7, vgrad(y, y + 7, c, shade(c, 0.72)));
+                if (hashNoise(x, y * 1.3) < 0.3) p.rect(x, y, 6, 2.5, shade(c, 0.6));   // half-drawn blind
+                glow(p, x + 3, y + 3.5, 6, 6, c, 0.3);
+            } else p.rect(x, y, 6, 7, vgrad(y, y + 7, rgb(30, 28, 52), rgb(18, 16, 34)));
+            p.rect(x - 0.5, y + 7, 7, 1, shade(wall0, 1.2));                         // sill
         }
+        if (int(std::lround((y - 22) / 11)) % 5 == 4) p.rect(-1, y + 9, fw + 1, 1.6, shade(wall0, 1.45));   // ledge
+    }
+    // a column of windows on the shaded side face
+    for (double y = 20; y < h - 22; y += 11) {
+        double r = hashNoise(y, 5.0 + kind);
+        double x0 = fw + side * 0.3;
+        p.poly({x0, y + 1, x0 + side * 0.35, y - 0.5, x0 + side * 0.35, y + 6, x0, y + 7.5},
+               r < 0.45 ? Paint(rgb(200, 160, 90)) : Paint(rgb(20, 18, 36)));
+    }
+    // rooftop: water tank on legs, an antenna with a red light
+    double tx = fw * 0.62;
+    p.rect(tx, 0, 12, 9, cylX(tx, tx + 12, rgb(96, 80, 96), 0.4, 0.2, 8));
+    p.poly({tx - 1, 0.5, tx + 6, -4, tx + 13, 0.5}, rgb(70, 60, 76));
+    for (double lx : {tx + 1.0, tx + 10.0}) p.rect(lx, 9, 1.2, 3, rgb(60, 56, 70));
+    p.rect(w * 0.3, -8, 2, 16, rgb(150, 150, 170));
+    p.ellipse(w * 0.3 + 1, -8.5, 1.6, 1.6, rgb(255, 40, 40));
+    glow(p, w * 0.3 + 1, -8.5, 6, 6, rgb(255, 40, 40), 0.9);
+    // lobby
+    p.rect(0, h - 16, fw, 16, rgb(16, 14, 28));
+    p.rect(fw * 0.3, h - 13, fw * 0.4, 13, vgrad(h - 13, h, rgb(255, 230, 170), rgb(220, 160, 90)));
+    p.rect(fw * 0.25, h - 17, fw * 0.5, 3, kind == 0 ? rgb(60, 200, 255) : rgb(255, 80, 200));
+    glow(p, fw / 2, h - 8, fw * 0.4, 10, rgb(255, 210, 140), 0.5);
     if (kind == 1) {
-        p.roundRect(10, 26, w - side - 20, 18, 3, vgrad(26, 44, rgb(255, 80, 200), rgb(180, 0, 120)));
-        glow(p, (w - side) / 2, 35, (w - side) / 2 + 6, 16, rgb(255, 80, 200), 0.6);
-        p.imageCentered(ttf("NEON", FONT_DISPLAY, 13, WHITE, rgb(255, 210, 255), rgb(120, 0, 80), 0.8), (w - side) / 2, 35);
+        p.roundRect(10, 26, fw - 20, 18, 3, vgrad(26, 44, rgb(255, 80, 200), rgb(180, 0, 120)));
+        glow(p, fw / 2, 35, fw / 2 + 6, 16, rgb(255, 80, 200), 0.6);
+        p.imageCentered(ttf("NEON", FONT_DISPLAY, 13, WHITE, rgb(255, 210, 255), rgb(120, 0, 80), 0.8), fw / 2, 35);
     } else {
-        p.imageCentered(ttf("HOTEL", FONT_DISPLAY, 11, rgb(140, 255, 255), rgb(40, 180, 255), rgb(0, 30, 60), 0.8), (w - side) / 2, 17);
+        p.imageCentered(ttf("HOTEL", FONT_DISPLAY, 11, rgb(140, 255, 255), rgb(40, 180, 255), rgb(0, 30, 60), 0.8), fw / 2, 17);
     }
     return p.finish(rgb(8, 8, 20), 1.0);
 }
@@ -389,6 +422,19 @@ Bitmap makePuff(Color c, double strength) {
 }
 
 // ----------------------------------------------------------- backgrounds ----
+// smooth value noise (0..1) and a few octaves of it, for textures in the backgrounds
+double vnoise(double x, double y) {
+    double xi = std::floor(x), yi = std::floor(y), fx = x - xi, fy = y - yi;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    double a = hashNoise(xi, yi), b = hashNoise(xi + 1, yi), c = hashNoise(xi, yi + 1), d = hashNoise(xi + 1, yi + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+double fbm(double x, double y, int oct = 4) {
+    double s = 0, n = 0, a = 1;
+    for (int i = 0; i < oct; ++i) { s += a * vnoise(x, y); n += a; x = x * 2.03 + 17.1; y = y * 2.01 + 9.3; a *= 0.5; }
+    return s / n;
+}
+
 struct Ridge {
     double a[6], ph[6]; int f[6];
     explicit Ridge(int baseFreq) { for (int i = 0; i < 6; ++i) { f[i] = baseFreq * (i + 1) + int(rnd(0, 2)); a[i] = 1.0 / (i + 1.3); ph[i] = rnd(0, 6.283); } }
@@ -400,8 +446,10 @@ struct Ridge {
 };
 
 // silhouette with slope lighting, anti-aliased top edge and optional snow caps
+// tex: 1 = bare rock (fine noise and gullies running down the slopes), 2 = wooded / grassy hills (speckled
+// tree cover), 0 = plain. Every textured ridge also fades into a light haze towards its foot.
 BgLayer ridgeLayer(int h, double minH, double maxH, int freq, Color top, Color bottom, double parallax, int yOff,
-                   Color snow = 0, bool jagged = false) {
+                   Color snow = 0, bool jagged = false, int tex = 1) {
     // drawn at full resolution: X, Y are bitmap pixels, x, y layout units (RENDER_SCALE pixels each)
     const int R = RENDER_SCALE, BW = 1024 * R, BH = h * R;
     BgLayer L{Bitmap(BW, BH), parallax, yOff};
@@ -424,6 +472,16 @@ BgLayer ridgeLayer(int h, double minH, double maxH, int freq, Color top, Color b
             double slope = (height(x + k) - height(x - k)) / (2 * k);
             double light = 1.0 + 0.24 * std::tanh(slope * 2.5);
             Color c = shade(lerpColor(top, bottom, y / h), light);
+            if (tex == 1) {          // rock: mottled, with gullies running down from the crest
+                double n = fbm(x * 0.09, y * 0.09, 4);
+                double gully = std::pow(std::fabs(std::sin(x * 0.35 + 3 * fbm(x * 0.02, y * 0.05, 2))), 6) * std::min(1.0, depthPx / 12);
+                c = shade(c, 0.9 + 0.2 * n - 0.12 * gully);
+            } else if (tex == 2) {   // trees and meadows: speckles and soft patches
+                double patch = fbm(x * 0.03, y * 0.06, 3);
+                double speck = hashNoise(std::floor(x * 1.2), std::floor(y * 1.6));
+                c = shade(c, 0.9 + 0.16 * patch + (speck > 0.82 ? -0.12 : speck < 0.1 ? 0.08 : 0));
+            }
+            if (tex) c = lerpColor(c, lerpColor(top, WHITE, 0.25), 0.18 * std::clamp((y - h * 0.6) / (h * 0.4), 0.0, 1.0));   // haze at the foot
             if (snow) {
                 // snow cap thickness grows with the peak height, with a wavy lower edge
                 double cap = std::clamp((hh - (minH + (maxH - minH) * 0.3)) / ((maxH - minH) * 0.7), 0.0, 1.0);
@@ -453,47 +511,179 @@ BgLayer upscaled(BgLayer L) {
     return L;
 }
 
+// Cumulus clouds, shaded per pixel: each cloud is a cluster of overlapping puffs with a flat base. The puff a
+// pixel belongs to gives the surface normal: lit from the upper left, shaded cooler underneath, with a bright
+// silver rim on the sunny edges and soft, slightly ragged outlines. The layer wraps around seamlessly.
 BgLayer cloudLayer(int count, Color c, double parallax, int yOff) {
-    Painter p(1024, 90, 2);
+    const int R = RENDER_SCALE, LW = 1024, LH = 110, BW = LW * R, BH = LH * R;
+    BgLayer L{Bitmap(BW, BH), parallax, yOff};
+    struct Puff { double x, y, r; };
+    struct Cloud { std::vector<Puff> puffs; double base, top, x0, x1; };
+    std::vector<Cloud> clouds;
     for (int i = 0; i < count; ++i) {
-        double cx = rnd(70, 950), cy = rnd(40, 62), w = rnd(40, 90);
-        std::vector<std::array<double, 3>> puffs;
-        for (int k = 0; k < 9; ++k) puffs.push_back({cx + rnd(-w, w) * 0.65, cy + rnd(-10, 4), rnd(12, 26)});
-        std::sort(puffs.begin(), puffs.end(), [](auto& a, auto& b) { return a[2] < b[2]; });
-        for (auto& q : puffs)
-            p.ellipse(q[0], q[1], q[2], q[2] * 0.62, sphere(q[0], q[1], q[2], q[2] * 0.62, c, 0.72, 0.1, 6));
-        p.rect(cx - w * 1.2, cy + 6, w * 2.4, 30, TRANSPARENT);
+        Cloud cl;
+        double cx = rnd(0, LW), w = rnd(30, 80), base = rnd(72, 96);
+        double hgt = w * rnd(0.3, 0.5);
+        int n = 7 + int(w / 9);
+        for (int k = 0; k < n; ++k) {                       // a broad base row and a taller, rounder middle
+            double u = rnd(-1, 1);
+            double r = w * (0.18 + 0.16 * (1 - u * u)) * rnd(0.75, 1.1);
+            double y = base - r * 0.55 - hgt * (1 - u * u) * rnd(0.2, 0.75);
+            cl.puffs.push_back({cx + u * w * 0.85, y, r});
+        }
+        cl.base = base; cl.top = 1e9; cl.x0 = 1e9; cl.x1 = -1e9;
+        for (auto& p : cl.puffs) { cl.top = std::min(cl.top, p.y - p.r); cl.x0 = std::min(cl.x0, p.x - p.r); cl.x1 = std::max(cl.x1, p.x + p.r); }
+        clouds.push_back(cl);
     }
-    Bitmap b = p.finish(0, 0, false);
-    // flatten cloud bottoms (rect above writes nothing; cut here)
-    for (int y = 0; y < b.h; ++y)
-        for (int x = 0; x < b.w; ++x)
-            if (y > 66 * RENDER_SCALE) b.px[size_t(y) * b.w + x] = TRANSPARENT;
-    return BgLayer{b, parallax, yOff};
+    const Color shadowC = lerpColor(shade(c, 0.74), rgb(150, 164, 200), 0.35);
+    const double lx = -0.42, ly = -0.72, lz = 0.55;      // light direction (towards the light)
+    for (const Cloud& cl : clouds) {
+        int Y0 = std::max(0, int(cl.top * R) - 2), Y1 = std::min(BH, int((cl.base + 2) * R));
+        for (int X0 = int(std::floor(cl.x0 * R)) - 2; X0 < int(std::ceil(cl.x1 * R)) + 2; ++X0) {
+            int X = ((X0 % BW) + BW) % BW;
+            double x = (X0 + 0.5) / R;
+            for (int Y = Y0; Y < Y1; ++Y) {
+                double y = (Y + 0.5) / R;
+                double best = 0; const Puff* bp = nullptr;
+                for (const Puff& p : cl.puffs) {
+                    double dx = (x - p.x) / p.r, dy = (y - p.y) / p.r;
+                    double f = 1 - (dx * dx + dy * dy);
+                    if (f > best) { best = f; bp = &p; }
+                }
+                if (!bp) continue;
+                // ragged edge and the flat, soft base
+                double edge = best + (fbm(x * 0.18, y * 0.18, 3) - 0.5) * 0.18;
+                double baseFade = std::clamp((cl.base - y) / 3.0, 0.0, 1.0);
+                double a = std::clamp(edge / 0.12, 0.0, 1.0) * baseFade;
+                if (a <= 0) continue;
+                // the surface normal, blended over all the puffs that overlap here (no seams between them)
+                double sx = 0, sy = 0, sz = 0, sw = 0;
+                for (const Puff& p : cl.puffs) {
+                    double dx = (x - p.x) / p.r, dy = (y - p.y) / p.r, f = 1 - (dx * dx + dy * dy);
+                    if (f <= 0) continue;
+                    double wgt = f * f * f;
+                    sx += dx * wgt; sy += dy * wgt; sz += std::sqrt(f) * wgt; sw += wgt;
+                }
+                double nl = std::sqrt(sx * sx + sy * sy + sz * sz);
+                double nx = sx / nl, ny = sy / nl, nz = sz / nl;
+                double lam = std::max(0.0, nx * lx + ny * ly + nz * lz);
+                double under = std::clamp((y - (cl.base - (cl.base - cl.top) * 0.45)) / ((cl.base - cl.top) * 0.45), 0.0, 1.0);
+                Color col = lerpColor(shadowC, c, std::clamp(0.3 + 0.75 * lam - 0.35 * under, 0.0, 1.0));
+                if (best < 0.18 && lam > 0.5) col = lerpColor(col, WHITE, 0.5 * (1 - best / 0.18));   // silver lining
+                col = shade(col, 0.97 + 0.06 * fbm(x * 0.3, y * 0.3, 2));
+                Color& dst = L.bmp.px[size_t(Y) * BW + X];
+                Color src = withAlpha(col, int(a * 255));
+                dst = (dst >> 24) ? blendOver(dst, src) : src;
+            }
+        }
+    }
+    // the cloud bases sit a little lower than the old layer's single flat base, so the sky looks deeper
+    L.yOff = yOff - 6;
+    return L;
 }
 
+// A thin sheet of high, wispy cirrus streaks
+BgLayer cirrusLayer(Color c, double parallax, int yOff) {
+    const int R = RENDER_SCALE, LW = 1024, LH = 60, BW = LW * R, BH = LH * R;
+    BgLayer L{Bitmap(BW, BH), parallax, yOff};
+    for (int Y = 0; Y < BH; ++Y)
+        for (int X = 0; X < BW; ++X) {
+            double x = (X + 0.5) / R, y = (Y + 0.5) / R;
+            // stretched noise, wrapped around the 1024 units
+            // noise sampled around a circle (so the layer wraps), stretched sideways into long soft streaks
+            double u = x / LW * 2 * M_PI;
+            double cu = std::cos(u) * 9 + 50, su = std::sin(u) * 9 + 20;
+            double n = fbm(cu + y * 0.02, su + y * 0.11, 3);
+            double fine = fbm(cu * 3 + 7, su * 3 + y * 0.3, 2);        // fibres along the streaks
+            double a = std::clamp((n - 0.5) * 3.0, 0.0, 1.0) * (0.75 + 0.25 * fine);
+            a *= std::sin(M_PI * y / LH);                       // fade out at the top and bottom
+            if (a > 0.01) L.bmp.px[size_t(Y) * BW + X] = withAlpha(c, int(a * 150));
+        }
+    return L;
+}
+
+// A full moon with soft grey seas and a halo (night)
+BgLayer moonLayer(double x0, double y0, double r, double parallax, int yOff) {
+    Painter p(1024, 170, 2);
+    glow(p, x0, y0, r * 3.2, r * 3.2, rgb(200, 200, 255), 0.35);
+    p.ellipse(x0, y0, r, r, Paint([=](double x, double y) {
+        Color c = sphere(x0, y0, r, r, rgb(250, 246, 226), 0.75, 0.05, 6)(x, y);
+        double n = fbm((x - x0) * 0.35 + 20, (y - y0) * 0.35, 3);
+        return n > 0.55 ? shade(c, 0.82) : c;
+    }));
+    return BgLayer{p.finish(0, 0, false), parallax, yOff};
+}
+
+// Night skyline (drawn in layout pixels, then blown up for crisp windows): towers of mixed heights with
+// setbacks, spires and slanted crowns, windows lit floor by floor, rooftop neon signs, water tanks and blinking
+// aircraft lights. 'lit_' = the near row with bright windows; otherwise a far, hazy row with sparse lights.
 BgLayer skylineLayer(int h, Color wall, bool lit_, double parallax, int yOff) {
     BgLayer L{Bitmap(1024, h), parallax, yOff};
+    auto put = [&](int x, int y, Color c) { if (x >= 0 && x < 1024 && y >= 0 && y < h) L.bmp.px[size_t(y) * 1024 + x] = c; };
+    auto add = [&](int x, int y, Color c) { if (x >= 0 && x < 1024 && y >= 0 && y < h) L.bmp.blend(x, y, c); };
+    Color neon[] = {rgb(255, 60, 200), rgb(60, 230, 255), rgb(255, 210, 60), rgb(150, 90, 255)};
     int x = 0;
     while (x < 1024) {
-        int bw = int(rnd(24, 62)), bh = int(rnd(h * 0.3, h * 0.95));
+        int bw = int(rnd(22, 58)), bh = int(rnd(h * 0.3, h * 0.95));
         if (x + bw > 1024) bw = 1024 - x;
-        for (int y = h - bh; y < h; ++y)
-            for (int xx = x; xx < x + bw; ++xx) {
-                double t = double(y - (h - bh)) / bh;
-                Color c = lerpColor(shade(wall, 1.25), wall, t);
-                if (xx == x) c = shade(c, 1.35);
-                if (xx >= x + bw - 2) c = shade(c, 0.75);
-                L.bmp.px[size_t(y) * 1024 + xx] = c;
+        int style = int(rnd(0, 4));                       // 0 flat, 1 setback, 2 spire, 3 slanted crown
+        int topY = h - bh;
+        int setW = style == 1 ? bw / 4 : 0, setH = style == 1 ? int(bh * 0.18) : 0;
+        Color face = wall;
+        for (int y = topY; y < h; ++y) {
+            bool upper = y < topY + setH;
+            int xa = x + (upper ? setW : 0), xb = x + bw - (upper ? setW : 0);
+            if (style == 3) {                             // slanted top
+                int cut = std::max(0, (topY + 10 - y));
+                xb = std::max(xa + 2, xb - cut * 2);
             }
-        if (lit_)
-            for (int y = h - bh + 6; y < h - 4; y += 7)
-                for (int wx = x + 4; wx < x + bw - 4; wx += 6)
-                    if (rnd(0, 1) < 0.35) {
-                        Color wc = rnd(0, 1) < 0.8 ? rgb(255, 210, 110) : rgb(120, 220, 255);
-                        L.bmp.fillRect(wx, y, 3, 3, wc);
-                        for (int gx = wx - 1; gx <= wx + 3; ++gx) L.bmp.blend(gx, y - 1, withAlpha(wc, 60));
-                    }
+            for (int xx = xa; xx < xb; ++xx) {
+                double t = double(y - topY) / bh;
+                Color c = lerpColor(shade(face, 1.25), face, t);
+                if (xx == xa) c = shade(c, 1.35);
+                if (xx >= xb - 2) c = shade(c, 0.72);
+                if (!lit_) c = lerpColor(c, rgb(70, 40, 100), 0.25 * (1 - t));   // far: hazier at the top
+                put(xx, y, c);
+            }
+        }
+        // windows, lit by floors
+        int wx0 = x + 3, wx1 = x + bw - 4;
+        for (int y = topY + setH + 5; y < h - 3; y += lit_ ? 5 : 4) {
+            double floorP = hashNoise(y * 0.7 + x, 3.1);
+            bool floorLit = floorP < (lit_ ? 0.55 : 0.25);
+            for (int wx = wx0; wx < wx1; wx += lit_ ? 4 : 3) {
+                double r = hashNoise(wx * 1.3, y * 2.1 + x);
+                bool on = floorLit ? r < 0.85 : r < (lit_ ? 0.1 : 0.04);
+                if (lit_) {
+                    Color wc = r < 0.6 ? rgb(255, 214, 120) : r < 0.85 ? rgb(130, 220, 255) : rgb(255, 160, 120);
+                    Color dark = shade(wall, 0.55);
+                    for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) put(wx + dx, y + dy, on ? wc : dark);
+                    if (on) { add(wx - 1, y, withAlpha(wc, 50)); add(wx + 2, y, withAlpha(wc, 50)); }
+                } else if (on) put(wx, y, r < 0.02 ? rgb(255, 230, 160) : rgb(200, 150, 110));
+            }
+        }
+        // crowns: spire with an aircraft light, or a lit crown / neon sign / water tank
+        int cx = x + bw / 2;
+        if (style == 2) {
+            for (int y = topY - 14; y < topY; ++y) put(cx, y, shade(wall, 1.4));
+            put(cx, topY - 15, rgb(255, 40, 40)); add(cx - 1, topY - 15, withAlpha(rgb(255, 40, 40), 110)); add(cx + 1, topY - 15, withAlpha(rgb(255, 40, 40), 110));
+        } else if (lit_ && hashNoise(x, 7) < 0.4) {     // rooftop neon sign
+            Color nc = neon[int(hashNoise(x, 9) * 4) % 4];
+            int sw = std::min(bw - 6, 18), sx = cx - sw / 2, sy = topY - 6;
+            for (int yy = sy; yy < sy + 4; ++yy) for (int xx = sx; xx < sx + sw; ++xx) put(xx, yy, (yy == sy || yy == sy + 3) ? shade(nc, 0.7) : nc);
+            for (int xx = sx - 2; xx < sx + sw + 2; ++xx) { add(xx, sy - 1, withAlpha(nc, 70)); add(xx, sy + 4, withAlpha(nc, 70)); }
+            put(sx + 2, sy + 4, shade(wall, 1.2)); put(sx + sw - 3, sy + 4, shade(wall, 1.2));
+            for (int yy = sy + 4; yy < topY; ++yy) { put(sx + 2, yy, shade(wall, 1.2)); put(sx + sw - 3, yy, shade(wall, 1.2)); }
+        } else if (hashNoise(x, 11) < 0.35) {           // a water tank on legs
+            int tx = x + bw / 3;
+            for (int yy = topY - 7; yy < topY - 2; ++yy) for (int xx = tx; xx < tx + 5; ++xx) put(xx, yy, shade(wall, 1.15));
+            put(tx, topY - 2, shade(wall, 1.1)); put(tx + 4, topY - 2, shade(wall, 1.1));
+            put(tx + 1, topY - 8, shade(wall, 1.15)); put(tx + 2, topY - 8, shade(wall, 1.15)); put(tx + 3, topY - 8, shade(wall, 1.15));
+        }
+        if (lit_ && style == 0 && hashNoise(x, 13) < 0.5) {   // a lit band around the crown
+            Color nc = neon[int(hashNoise(x, 15) * 4) % 4];
+            for (int xx = x + 1; xx < x + bw - 2; ++xx) { put(xx, topY + 1, nc); add(xx, topY, withAlpha(nc, 90)); add(xx, topY + 2, withAlpha(nc, 90)); }
+        }
         x += bw + int(rnd(0, 6));
     }
     return L;
@@ -1254,6 +1444,667 @@ BgLayer tuscanHillsLayer() {   // soft rolling hills with rows of cypresses
     }
     return BgLayer{p.finish(0, 0, false), 0.2, 0};
 }
+
+// =========================================================== flair (1.4) ====
+// More roadside variety for every stage, and the bitmaps for the ambient effects. Each is generated in its own
+// seeded block (see Graphics::generate), so none of them changes any other graphic.
+
+// ---- desert
+// A tumbleweed: a ball of dry, curling twigs. 'rot' turns the same tangle in the picture plane (it rolls
+// sideways across the road), so a set of frames at different angles animates the roll.
+Bitmap makeTumbleweed(double rot) {
+    // a dense, airy ball of thin, curling, sun-dried stems: dark brown inside, greyish tan where the light
+    // catches the outer twigs, with a few forked tips. Each stem is a short curved arc drawn as a polyline.
+    std::mt19937 r(9177);                                  // the same tangle for every frame
+    auto R = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(r); };
+    const double c = 24, rad = 21;
+    Painter p(48, 48, SS, RENDER_SCALE, 2, 2);
+    const double cr = std::cos(rot), sr = std::sin(rot);
+    auto put = [&](double x, double y) { return std::array<double, 2>{c + (x * cr - y * sr) * rad, c + (x * sr + y * cr) * rad}; };
+    struct Stem { std::vector<std::array<double, 2>> pts; double z, t; };
+    std::vector<Stem> stems;
+    for (int i = 0; i < 320; ++i) {
+        // start on a jittered sphere and curl along it: the direction turns a little every step
+        double th = R(0, 2 * M_PI), ph = std::acos(R(-1, 1)), rr = R(0.35, 1.0);
+        double dth = R(-0.12, 0.12), dph = R(-0.1, 0.1), curl = R(-0.05, 0.05), drr = R(-0.03, 0.03);
+        int n = int(R(4, 9));
+        Stem st; st.t = R(0.45, 0.85) * (0.6 + 0.6 * rr); st.z = 0;
+        for (int k = 0; k <= n; ++k) {
+            double x = rr * std::sin(ph) * std::cos(th), y = rr * std::cos(ph), z = rr * std::sin(ph) * std::sin(th);
+            st.pts.push_back(put(x, y));
+            st.z += z / (n + 1);
+            th += dth; ph += dph; dth += curl; rr = std::clamp(rr + drr, 0.25, 1.02);
+        }
+        stems.push_back(st);
+    }
+    std::sort(stems.begin(), stems.end(), [](const Stem& a, const Stem& b) { return a.z < b.z; });   // back first
+    for (const Stem& st : stems) {
+        double front = (st.z + 1) / 2;                      // 0 back .. 1 front
+        Color col = lerpColor(rgb(72, 52, 32), rgb(172, 142, 102), std::pow(front, 1.2));
+        col = shade(col, 0.85 + 0.25 * hashNoise(st.pts[0][0] * 3, st.pts[0][1] * 3));
+        for (size_t k = 1; k < st.pts.size(); ++k)
+            p.line(st.pts[k - 1][0], st.pts[k - 1][1], st.pts[k][0], st.pts[k][1], st.t, col);
+        if (front > 0.55 && hashNoise(st.pts[0][0] * 7, st.pts[0][1] * 5) < 0.35) {   // a forked tip
+            auto a = st.pts[st.pts.size() - 2], b = st.pts.back();
+            double dx = b[0] - a[0], dy = b[1] - a[1];
+            p.line(b[0], b[1], b[0] + dx * 0.8 - dy * 0.7, b[1] + dy * 0.8 + dx * 0.7, st.t * 0.7, shade(col, 1.1));
+        }
+    }
+    return p.finish(rgb(52, 36, 22), 0.25);
+}
+
+Bitmap makeDeadTree() {   // a bleached, bare desert tree
+    Painter p(100, 130, SS, RENDER_SCALE, 4, 2);
+    std::function<void(double, double, double, double, double, int)> branch =
+        [&](double x, double y, double ang, double len, double th, int depth) {
+            double x1 = x + std::cos(ang) * len, y1 = y - std::sin(ang) * len;
+            Color bark = lerpColor(rgb(120, 98, 80), rgb(196, 176, 150), depth / 6.0);
+            p.line(x, y, x1, y1, th, bark);
+            if (depth >= 6 || len < 5) return;
+            int n = rnd(0, 1) < 0.35 ? 3 : 2;
+            for (int i = 0; i < n; ++i)
+                branch(x1, y1, ang + rnd(-0.75, 0.75), len * rnd(0.62, 0.8), th * 0.66, depth + 1);
+        };
+    p.poly({44, 130, 47, 96, 53, 96, 57, 130}, cylX(44, 57, rgb(150, 126, 100), 0.45, 0.1, 6));
+    branch(50, 98, M_PI / 2 + 0.1, 30, 6, 1);
+    return p.finish(rgb(50, 40, 32), 0.8);
+}
+
+Bitmap makeWindPump() {   // an old western wind pump: lattice tower, fan wheel, tail vane and a water tank
+    Painter p(110, 210, SS, RENDER_SCALE, 4, 4);
+    Color steel = rgb(150, 150, 150), rust = rgb(150, 86, 50);
+    // tank
+    p.rect(60, 168, 46, 42, cylX(60, 106, rgb(140, 150, 160), 0.4, 0.4, 14));
+    for (double y : {176.0, 190.0, 204.0}) p.rect(60, y, 46, 1.5, shade(rgb(140, 150, 160), 0.7));
+    p.ellipse(83, 168, 23, 3, rgb(90, 100, 110));
+    // lattice tower
+    const double bx0 = 18, bx1 = 58, tx0 = 34, tx1 = 42, top = 52;
+    p.line(bx0, 210, tx0, top, 2.2, steel);
+    p.line(bx1, 210, tx1, top, 2.2, steel);
+    for (int i = 0; i < 7; ++i) {
+        double t0 = i / 7.0, t1 = (i + 1) / 7.0;
+        double ya = 210 - (210 - top) * t0, yb = 210 - (210 - top) * t1;
+        double la = bx0 + (tx0 - bx0) * t0, ra = bx1 + (tx1 - bx1) * t0, lb = bx0 + (tx0 - bx0) * t1, rb = bx1 + (tx1 - bx1) * t1;
+        p.line(la, ya, rb, yb, 1.0, shade(steel, 0.8));
+        p.line(ra, ya, lb, yb, 1.0, shade(steel, 0.8));
+        p.line(la, ya, ra, ya, 1.2, steel);
+    }
+    p.rect(30, top - 6, 16, 6, rust);                       // gearbox
+    p.poly({46, top - 4, 92, top - 10, 92, top + 4, 46, top - 1}, rust);    // tail boom
+    p.poly({80, top - 22, 100, top - 26, 100, top + 14, 80, top + 8}, Paint([=](double, double y) {   // tail vane
+        return shade(rgb(196, 70, 50), 0.9 + 0.2 * std::sin(y * 0.4));
+    }));
+    // fan wheel (seen a little from the side: an ellipse)
+    const double wx = 30, wy = top - 3;
+    for (int i = 0; i < 18; ++i) {
+        double a = i * 2 * M_PI / 18;
+        double ex = wx + std::cos(a) * 9, ey = wy + std::sin(a) * 26;
+        double ex2 = wx + std::cos(a + 0.22) * 9, ey2 = wy + std::sin(a + 0.22) * 26;
+        double ix = wx + std::cos(a) * 3, iy = wy + std::sin(a) * 8;
+        p.poly({ix, iy, ex, ey, ex2, ey2}, i % 2 ? rgb(196, 196, 190) : rgb(164, 164, 160));
+    }
+    p.ellipse(wx, wy, 9, 26, Paint([=](double x, double y) {
+        double dx = (x - wx) / 9, dy = (y - wy) / 26, d = std::sqrt(dx * dx + dy * dy);
+        return d > 0.93 ? rgb(110, 110, 110) : TRANSPARENT;
+    }));
+    p.ellipse(wx, wy, 3, 5, sphere(wx, wy, 3, 5, rust));
+    return p.finish(rgb(40, 36, 32), 0.8);
+}
+
+Bitmap makeDiner() {   // a chrome roadside diner with a big sign and two old petrol pumps
+    const int w = 200, h = 120;
+    Painter p(w, h, SS, RENDER_SCALE, 4, 6);
+    // sign on a pole
+    p.rect(176, 20, 5, 100, cylX(176, 181, rgb(170, 170, 176), 0.4, 0.6, 20));
+    p.roundRect(150, 0, 56, 30, 8, vgrad(0, 30, rgb(240, 60, 60), rgb(170, 20, 30)));
+    p.roundRect(153, 3, 50, 24, 6, alpha(WHITE, 0.08));
+    p.imageCentered(ttf("DINER", FONT_DISPLAY, 13, rgb(255, 250, 220), rgb(255, 220, 120), rgb(90, 0, 10), 0.8), 178, 15);
+    for (double x = 154; x < 204; x += 6) p.ellipse(x, 29, 1.4, 1.4, rgb(255, 230, 140));
+    // the diner: a long rounded chrome-and-red body
+    const double top = 62;
+    p.roundRect(4, top, 150, h - top, 10, Paint([=](double x, double y) {
+        double t = (y - top) / (h - top);
+        Color c = t < 0.18 ? lerpColor(rgb(250, 250, 255), rgb(150, 160, 176), t / 0.18)
+                : t < 0.62 ? rgb(46, 60, 84)
+                : t < 0.7  ? rgb(240, 240, 246)
+                           : lerpColor(rgb(214, 40, 44), rgb(150, 20, 30), (t - 0.7) / 0.3);
+        if (t > 0.7 && std::fmod(x, 6.0) < 0.6) c = shade(c, 0.85);
+        return c;
+    }));
+    for (double x = 16; x < 146; x += 18) {                     // lit windows
+        p.rect(x, top + 14, 14, 18, vgrad(top + 14, top + 32, rgb(255, 236, 170), rgb(240, 176, 90)));
+        p.rect(x + 6.5, top + 14, 1, 18, rgb(200, 200, 210));
+    }
+    p.roundRect(68, top + 10, 18, h - top - 10, 3, vgrad(top + 10, h, rgb(220, 200, 160), rgb(160, 120, 80)));   // door
+    p.rect(0, top - 4, 158, 5, cylY(top - 4, top + 1, rgb(220, 224, 232), 0.4, 0.8, 30));   // chrome cornice
+    // two petrol pumps
+    for (double x : {116.0, 136.0}) {
+        p.roundRect(x, 92, 12, 28, 3, vgrad(92, 120, rgb(240, 200, 60), rgb(200, 150, 30)));
+        p.ellipse(x + 6, 90, 6, 5, sphere(x + 6, 90, 6, 5, rgb(255, 250, 240), 0.6, 0.4, 20));
+        p.rect(x + 2, 98, 8, 6, rgb(40, 40, 46));
+    }
+    return p.finish(rgb(30, 20, 20), 1.0);
+}
+
+// ---- coast
+Bitmap makeBeachHut(int style) {   // a little striped wooden beach hut
+    const int w = 74, h = 92;
+    Painter p(w, h, SS, RENDER_SCALE, 3, 3);
+    Color stripes[3][2] = {{rgb(70, 150, 230), rgb(250, 250, 246)}, {rgb(250, 120, 140), rgb(250, 248, 236)},
+                           {rgb(80, 200, 160), rgb(255, 230, 120)}};
+    Color a = stripes[style % 3][0], b = stripes[style % 3][1];
+    const double top = 34;
+    p.rect(4, top, 64, h - top - 6, Paint([=](double x, double y) {
+        Color c = (int(std::floor(x / 8)) & 1) ? a : b;
+        c = shade(c, 0.96 + 0.06 * hashNoise(x * 2, y * 0.3));
+        return x > 56 ? shade(c, 0.78) : c;
+    }));
+    p.poly({0, top + 2, 36, 6, 72, top + 2}, vgrad(6, top, rgb(226, 220, 204), rgb(180, 170, 150)));
+    p.rect(-2, top, 76, 3, rgb(250, 250, 250));
+    p.roundRect(22, top + 16, 24, h - top - 22, 2, vgrad(top + 16, h, shade(a, 0.7), shade(a, 0.5)));   // door
+    p.ellipse(41, top + 34, 1.4, 1.4, rgb(230, 200, 90));
+    for (double x : {8.0, 64.0}) p.rect(x - 2, h - 6, 4, 6, rgb(130, 100, 70));          // stilts
+    p.rect(-2, h - 8, 76, 3, rgb(170, 130, 90));                                          // deck
+    return p.finish(rgb(30, 36, 50), 0.9);
+}
+
+Bitmap makeLifeguard() {   // a lifeguard tower on stilts, red and white, with a flag
+    Painter p(80, 150, SS, RENDER_SCALE, 4, 6);
+    Color wood = rgb(250, 248, 240), red = rgb(220, 40, 40);
+    for (double x : {14.0, 62.0}) p.line(x, 150, x + (x < 40 ? 6 : -6), 70, 3.2, cylX(x - 2, x + 2, rgb(220, 210, 190)));
+    p.line(17, 120, 59, 100, 1.6, rgb(200, 190, 170));
+    p.line(17, 100, 59, 120, 1.6, rgb(200, 190, 170));
+    p.line(46, 150, 64, 70, 2.0, rgb(200, 190, 170));                                     // ladder rails
+    for (double t = 0.1; t < 1; t += 0.12) p.line(46 + 18 * t - 4, 150 - 80 * t, 46 + 18 * t + 4, 150 - 80 * t, 1.2, rgb(200, 190, 170));
+    p.rect(8, 44, 64, 28, Paint([=](double x, double) { return std::fmod(x - 8, 16.0) < 8 ? red : wood; }));   // cabin
+    p.rect(14, 50, 52, 12, vgrad(50, 62, rgb(110, 170, 210), rgb(40, 80, 120)));                            // window
+    p.poly({2, 46, 40, 26, 78, 46}, vgrad(26, 46, rgb(240, 60, 50), rgb(170, 30, 30)));                     // roof
+    p.rect(39, 6, 2, 22, rgb(200, 200, 200));                                                               // flag
+    p.poly({41, 6, 60, 10, 41, 15}, Paint([](double, double y) { return y < 10.5 ? rgb(250, 220, 40) : rgb(220, 40, 40); }));
+    return p.finish(rgb(30, 20, 20), 0.9);
+}
+
+// ---- night city: a tall tower with a vertical neon sign, setbacks and a lit crown
+Bitmap makeBuilding3() {
+    const int w = 112, h = 250;
+    Painter p(w, h, SS, RENDER_SCALE, 4, 18);
+    Color wall0 = rgb(54, 70, 110), wall1 = rgb(22, 26, 52);
+    const double side = 18;
+    auto block = [&](double x0, double x1, double y0) {
+        p.rect(x0, y0, x1 - x0 - side * 0.6, h - y0, vgrad(y0, h, wall0, wall1));
+        p.poly({x1 - side * 0.6, y0, x1, y0 - 5, x1, double(h), x1 - side * 0.6, double(h)}, vgrad(y0, h, shade(wall0, 0.55), shade(wall1, 0.55)));
+        p.poly({x0, y0, x0 + side * 0.6, y0 - 5, x1, y0 - 5, x1 - side * 0.6, y0}, shade(wall0, 1.35));
+        // windows in bands; whole floors lit or dark, a few odd ones out
+        for (double y = y0 + 8; y < h - 18; y += 9) {
+            bool floorLit = hashNoise(y * 0.37, x0) < 0.62;
+            for (double x = x0 + 5; x < x1 - side * 0.6 - 5; x += 7) {
+                double r = hashNoise(x * 1.7, y * 2.3);
+                bool on = floorLit ? r < 0.8 : r < 0.12;
+                Color c = r < 0.5 ? rgb(255, 222, 140) : r < 0.75 ? rgb(170, 230, 255) : rgb(255, 170, 120);
+                p.rect(x, y, 4, 5, on ? vgrad(y, y + 5, c, shade(c, 0.7)) : Paint(rgb(18, 18, 36)));
+            }
+        }
+    };
+    block(14, 98, 70);       // the main shaft
+    block(26, 86, 36);       // first setback
+    block(38, 74, 14);       // crown
+    // crown lights and a spire with a blinking aircraft light
+    p.rect(38, 12, 30, 2, rgb(120, 230, 255));
+    glow(p, 53, 13, 22, 6, rgb(120, 230, 255), 0.8);
+    p.poly({51, 12, 53, -14, 55, 12}, cylX(51, 55, rgb(170, 176, 190), 0.4, 0.6, 20));
+    p.ellipse(53, -14, 2, 2, rgb(255, 50, 40));
+    glow(p, 53, -14, 7, 7, rgb(255, 60, 40), 1.0);
+    // vertical neon sign down the side of the shaft
+    p.roundRect(2, 90, 16, 96, 4, vgrad(90, 186, rgb(30, 10, 40), rgb(20, 6, 30)));
+    const char* letters[] = {"C", "L", "U", "B"};
+    for (int i = 0; i < 4; ++i)
+        p.imageCentered(ttf(letters[i], FONT_DISPLAY, 15, rgb(255, 250, 255), rgb(255, 120, 230), rgb(150, 0, 110), 1.0), 10, 103 + i * 23);
+    glow(p, 10, 138, 16, 56, rgb(255, 80, 220), 0.55);
+    // street level: lit entrance and awning
+    p.rect(14, h - 16, 66, 16, rgb(20, 18, 30));
+    p.rect(34, h - 14, 24, 14, vgrad(h - 14, h, rgb(255, 214, 140), rgb(200, 130, 70)));
+    p.rect(28, h - 18, 36, 4, rgb(220, 40, 120));
+    return p.finish(rgb(6, 6, 18), 1.0);
+}
+
+// ---- snow: an alpine chalet with a wide, snow-laden roof
+Bitmap makeChalet() {
+    const int w = 160, h = 130;
+    Painter p(w, h, SS, RENDER_SCALE, 6, 4);
+    Color plaster = rgb(240, 238, 230), wood = rgb(120, 70, 40);
+    const double wallTop = 54, side = 24, mid = 92;
+    p.rect(0, mid, w - side, h - mid, vgrad(mid, h, plaster, shade(plaster, 0.88)));               // stone/plaster ground floor
+    p.rect(0, wallTop, w - side, mid - wallTop, Paint([=](double x, double y) {                     // wooden upper floor
+        Color c = shade(wood, 0.9 + 0.2 * hashNoise(x * 0.4, std::floor(y / 4)));
+        return std::fmod(y, 4.0) < 0.6 ? shade(c, 0.7) : c;
+    }));
+    p.poly({w - side, wallTop, double(w), wallTop - 8, double(w), double(h), w - side, double(h)}, shade(wood, 0.55));
+    // balcony with carved rails
+    p.rect(-4, mid - 4, w - side + 8, 4, shade(wood, 0.8));
+    for (double x = -2; x < w - side + 4; x += 5) p.roundRect(x, mid - 16, 3, 12, 1.4, shade(wood, 1.15));
+    p.rect(-4, mid - 18, w - side + 8, 3, shade(wood, 0.9));
+    // lit windows with shutters
+    for (double cx : {20.0, 54.0, 88.0, 116.0})
+        for (double y : {wallTop + 8, mid + 10}) {
+            if (y > mid && std::fabs(cx - 54) < 1) { p.roundRect(cx - 9, mid + 8, 18, h - mid - 8, 3, vgrad(mid + 8, h, rgb(120, 70, 40), rgb(80, 44, 24))); continue; }
+            p.rect(cx - 7, y, 14, 16, vgrad(y, y + 16, rgb(255, 222, 150), rgb(230, 160, 80)));
+            p.rect(cx - 0.6, y, 1.2, 16, wood);
+            p.rect(cx - 13, y, 6, 16, rgb(40, 100, 60));
+            p.rect(cx + 7, y, 6, 16, rgb(40, 100, 60));
+        }
+    // a low, wide roof with deep eaves and a thick blanket of snow
+    p.poly({-12, wallTop + 4, (w - side) / 2.0, 14, w - side + 12, wallTop + 4}, vgrad(14, wallTop + 4, rgb(90, 60, 40), rgb(60, 40, 26)));
+    p.poly({-14, wallTop + 2, (w - side) / 2.0, 10, w - side + 14, wallTop + 2, w - side + 10, wallTop - 4, (w - side) / 2.0, 6, -10, wallTop - 4},
+           Paint([=](double x, double y) { return shade(rgb(250, 252, 255), 0.9 + 0.1 * hashNoise(x * 0.5, y)); }));
+    p.poly({(w - side) / 2.0, 6, double(w) + 4, wallTop - 14, double(w) + 4, wallTop - 6, w - side + 14, wallTop + 2},
+           rgb(214, 224, 240));
+    p.rect(26, 2, 10, 20, cylX(26, 36, rgb(170, 160, 150), 0.4, 0.2, 8));
+    p.roundRect(24, -2, 14, 6, 3, rgb(250, 252, 255));
+    return p.finish(rgb(40, 30, 24), 1.0);
+}
+
+// ---- forest: a log cabin with a mossy roof
+Bitmap makeCabin() {
+    const int w = 140, h = 100;
+    Painter p(w, h, SS, RENDER_SCALE, 6, 6);
+    Color log = rgb(140, 92, 56);
+    const double top = 44, side = 22;
+    p.rect(0, top, w - side, h - top, Paint([=](double x, double y) {
+        double v = std::fmod(y - top, 8.0) / 8.0;                    // round logs
+        Color c = shade(log, 0.7 + 0.45 * std::sin(v * M_PI));
+        return shade(c, 0.92 + 0.12 * hashNoise(x * 0.2, std::floor((y - top) / 8)));
+    }));
+    for (double y = top; y < h; y += 8) {                            // log ends at the corners
+        p.ellipse(2, y + 4, 4, 4, sphere(2, y + 4, 4, 4, rgb(200, 160, 110), 0.5, 0.1, 4));
+        p.ellipse(w - side - 2, y + 4, 4, 4, sphere(w - side - 2, y + 4, 4, 4, rgb(200, 160, 110), 0.5, 0.1, 4));
+    }
+    p.poly({w - side, top, double(w), top - 6, double(w), double(h), w - side, double(h)}, shade(log, 0.55));
+    for (double cx : {24.0, 94.0}) {
+        p.rect(cx - 9, top + 14, 18, 16, vgrad(top + 14, top + 30, rgb(255, 214, 140), rgb(220, 150, 70)));
+        p.rect(cx - 0.6, top + 14, 1.2, 16, shade(log, 0.6));
+        p.rect(cx - 10, top + 30, 20, 3, shade(log, 0.8));
+    }
+    p.rect(52, top + 12, 18, h - top - 12, vgrad(top + 12, h, rgb(110, 70, 40), rgb(70, 44, 24)));   // door
+    p.poly({-8, top + 2, (w - side) / 2.0, 6, w - side + 8, top + 2}, Paint([=](double x, double y) {   // mossy shingles
+        Color c = lerpColor(rgb(90, 110, 60), rgb(60, 70, 44), (y - 6) / (top - 4));
+        if (std::fmod(y, 5.0) < 0.8) c = shade(c, 0.75);
+        return shade(c, 0.85 + 0.3 * hashNoise(x * 0.6, y * 0.6));
+    }));
+    p.poly({(w - side) / 2.0, 6, double(w) + 2, top - 10, double(w) + 2, top - 4, w - side + 8, top + 2}, rgb(56, 66, 40));
+    p.rect(92, 4, 12, 24, Paint([](double x, double y) {             // stone chimney
+        return shade(rgb(150, 146, 140), 0.75 + 0.4 * hashNoise(std::floor(x / 4), std::floor(y / 3)));
+    }));
+    return p.finish(rgb(30, 22, 14), 1.0);
+}
+
+// ---- sunset: a googie motel sign with a big arrow and a star
+Bitmap makeMotelSign() {
+    Painter p(110, 210, SS, RENDER_SCALE, 6, 10);
+    p.rect(48, 70, 8, 140, cylX(48, 56, rgb(200, 190, 180), 0.45, 0.5, 18));
+    // star on top
+    std::vector<double> star;
+    for (int i = 0; i < 10; ++i) {
+        double a = -M_PI / 2 + i * M_PI / 5, r = i % 2 ? 7 : 17;
+        star.push_back(52 + std::cos(a) * r); star.push_back(16 + std::sin(a) * r);
+    }
+    p.poly(star, vgrad(0, 32, rgb(255, 250, 200), rgb(255, 200, 60)));
+    glow(p, 52, 16, 30, 26, rgb(255, 220, 120), 0.6);
+    // the board
+    p.roundRect(8, 36, 96, 34, 6, vgrad(36, 70, rgb(40, 200, 200), rgb(20, 130, 150)));
+    p.imageCentered(ttf("MOTEL", FONT_DISPLAY, 19, rgb(255, 250, 240), rgb(255, 230, 200), rgb(120, 20, 60), 1.0), 56, 53);
+    // the arrow, with chaser lights
+    p.poly({0, 80, 82, 80, 82, 72, 108, 92, 82, 112, 82, 104, 0, 104}, vgrad(72, 112, rgb(255, 80, 120), rgb(200, 30, 80)));
+    p.imageCentered(ttf("VACANCY", FONT_UI, 10, rgb(255, 255, 220), rgb(255, 240, 160), 0, 0), 42, 92);
+    for (double x = 4; x < 80; x += 6) { p.ellipse(x, 84, 1.3, 1.3, rgb(255, 240, 160)); p.ellipse(x, 100, 1.3, 1.3, rgb(255, 240, 160)); }
+    glow(p, 50, 92, 60, 22, rgb(255, 90, 140), 0.5);
+    return p.finish(rgb(30, 10, 20), 1.0);
+}
+
+// ---- future: a glass habitat dome with a garden inside
+Bitmap makeDome() {
+    const int w = 170, h = 100;
+    Painter p(w, h, SS, RENDER_SCALE, 4, 4);
+    const double cx = 85, cy = 86, rx = 76, ry = 74;
+    p.ellipse(cx, cy, rx, ry, Paint([=](double x, double y) {           // the garden inside
+        if (y > cy) return TRANSPARENT;
+        double n = hashNoise(x * 0.4, y * 0.4);
+        Color c = lerpColor(rgb(60, 150, 100), rgb(140, 210, 150), (cy - y) / ry);
+        return shade(c, 0.75 + 0.4 * n);
+    }));
+    for (int i = 0; i < 9; ++i) {                                         // a few round trees
+        double tx = 30 + i * 14 + hashNoise(i, 3) * 6, ty = cy - 18 - hashNoise(i, 7) * 22, tr = 9 + hashNoise(i, 9) * 6;
+        p.ellipse(tx, ty, tr, tr, sphere(tx, ty, tr, tr, rgb(40, 140, 90), 0.4, 0.15, 8));
+    }
+    p.ellipse(cx, cy, rx, ry, Paint([=](double x, double y) {           // the glass, with a gridded frame
+        if (y > cy) return TRANSPARENT;
+        double dx = (x - cx) / rx, dy = (y - cy) / ry, d = std::sqrt(dx * dx + dy * dy);
+        double ang = std::atan2(-dy, dx);
+        bool rib = std::fmod(ang * 8 / M_PI + 16, 1.0) < 0.06 || std::fmod(d * 6, 1.0) < 0.05;
+        if (rib) return alpha(rgb(240, 250, 250), 0.9);
+        double hl = std::max(0.0, 1 - std::hypot(dx + 0.4, dy + 0.55) / 0.35);
+        return alpha(lerpColor(rgb(180, 230, 240), WHITE, hl), 0.25 + 0.5 * hl + 0.25 * std::pow(d, 6));
+    }));
+    p.rect(2, cy - 4, w - 4, h - cy + 4, vgrad(cy - 4, h, rgb(250, 250, 246), rgb(200, 200, 196)));   // white base ring
+    for (double x = 10; x < w - 10; x += 16) p.rect(x, cy + 2, 8, 2, rgb(40, 190, 200));
+    glow(p, cx, cy + 3, rx, 6, rgb(60, 220, 220), 0.4);
+    return p.finish(rgb(30, 60, 70), 0.9);
+}
+
+// ---- Brazil: a carnival confetti cannon on a decorated pole, aimed at the road
+Bitmap makeConfettiCannon() {
+    Painter p(80, 160, SS, RENDER_SCALE, 6, 6);
+    p.rect(36, 50, 8, 110, Paint([](double, double y) { return (int(std::floor(y / 8)) & 1) ? rgb(255, 230, 0) : rgb(0, 160, 80); }));
+    for (int i = 0; i < 6; ++i) {                                         // streamers
+        Color c[] = {rgb(255, 60, 140), rgb(0, 180, 255), rgb(255, 220, 0), rgb(140, 70, 255), rgb(0, 210, 120), rgb(255, 120, 30)};
+        double x0 = 40, y0 = 60;
+        for (double t = 0; t < 1; t += 0.05)
+            p.line(x0 + (i - 2.5) * 10 * t + std::sin(t * 9 + i) * 2, y0 + t * 60, x0 + (i - 2.5) * 10 * (t + 0.05) + std::sin((t + 0.05) * 9 + i) * 2,
+                   y0 + (t + 0.05) * 60, 1.4, c[i]);
+    }
+    // the cannon: a fat drum tilted towards the road
+    p.poly({12, 30, 56, 14, 66, 40, 22, 56}, Paint([](double x, double y) {
+        double u = (x * 0.35 + y * 0.94);
+        return (int(std::floor(u / 7)) & 1) ? rgb(255, 60, 140) : rgb(255, 230, 40);
+    }));
+    p.ellipse(61, 27, 6, 13, sphere(61, 27, 6, 13, rgb(60, 30, 60), 0.5, 0.2, 8));
+    for (int i = 0; i < 18; ++i) {                                        // confetti spilling out
+        Color c[] = {rgb(255, 60, 140), rgb(0, 180, 255), rgb(255, 220, 0), rgb(140, 70, 255), rgb(0, 210, 120)};
+        double x = 64 + hashNoise(i, 1) * 14, y = 10 + hashNoise(i, 2) * 34;
+        p.rect(x, y, 2.4, 1.6, c[i % 5]);
+    }
+    p.ellipse(40, 50, 9, 6, sphere(40, 50, 9, 6, rgb(240, 200, 40), 0.5, 0.5, 20));
+    return p.finish(rgb(40, 10, 40), 0.9);
+}
+
+// ---- Paris: a second apartment block style - pale grey stone, slate roof, rounded corner and a shop
+Bitmap makeHaussmann2() {
+    const int w = 140, h = 240;
+    Painter p(w, h, SS, RENDER_SCALE, 4, 14);
+    const double side = 20, roofY = 46;
+    Color stone = rgb(222, 218, 210), slate = rgb(74, 82, 100);
+    p.rect(0, roofY, w - side, h - roofY, Paint([=](double x, double y) {
+        Color c = lerpColor(stone, shade(stone, 0.85), (y - roofY) / (h - roofY));
+        if (std::fmod(y - roofY, 8.0) < 0.6) c = shade(c, 0.9);
+        if (std::fmod(x + (int(std::floor((y - roofY) / 8)) & 1) * 9, 18.0) < 0.5) c = shade(c, 0.94);   // ashlar joints
+        return c;
+    }));
+    p.poly({w - side, roofY, double(w), roofY - 8, double(w), double(h), w - side, double(h)}, vgrad(roofY, h, shade(stone, 0.68), shade(stone, 0.58)));
+    // curved slate roof with oeil-de-boeuf dormers and a corner dome
+    p.poly({-2, roofY, 6, 18, w - side - 6, 18, w - side + 2, roofY}, Paint([=](double x, double y) {
+        Color c = lerpColor(shade(slate, 1.2), shade(slate, 0.8), (y - 18) / (roofY - 18));
+        return std::fmod(x + (int(y / 3) & 1) * 2, 4.0) < 0.5 ? shade(c, 0.8) : c;
+    }));
+    p.poly({w - side + 2, roofY, w - side - 6, 18, double(w) - 6, 10, double(w), roofY - 8}, shade(slate, 0.6));
+    p.ellipse(18, 18, 14, 16, Paint([=](double x, double y) {          // corner dome
+        if (y > 18) return TRANSPARENT;
+        return sphere(18, 18, 14, 16, slate, 0.45, 0.4, 14)(x, y);
+    }));
+    p.rect(17, -2, 2, 6, rgb(200, 170, 80));
+    for (double x = 40; x < w - side - 14; x += 22) {
+        p.ellipse(x, 32, 6, 7, rgb(236, 230, 220));
+        p.ellipse(x, 32, 3.5, 4.5, rgb(46, 56, 76));
+    }
+    p.rect(-2, roofY - 3, w - side + 4, 5, rgb(240, 236, 226));       // cornice
+    // windows: six floors, the 2nd with a long balcony and the top with little ones
+    for (int f = 0; f < 6; ++f) {
+        double y = roofY + 8 + f * 28;
+        for (double x = 8; x < w - side - 12; x += 18) {
+            p.rect(x - 1, y - 2, 12, 2, shade(stone, 0.82));
+            p.rect(x, y, 10, 19, vgrad(y, y + 19, rgb(80, 96, 120), rgb(42, 48, 64)));
+            p.rect(x + 4.5, y, 1, 19, rgb(226, 222, 212));
+            if (f == 1) {
+                p.rect(x - 2, y + 2, 14, 3, Paint([](double, double yy) { return yy < 0 ? BLACK : rgb(232, 228, 218); }));
+            }
+        }
+        if (f == 1 || f == 4) {
+            p.rect(2, y + 17, w - side - 6, 2, rgb(28, 28, 34));
+            p.rect(2, y + 11, w - side - 6, 1.2, rgb(28, 28, 34));
+            for (double bx = 3; bx < w - side - 4; bx += 2.4) p.rect(bx, y + 11, 0.6, 7, rgb(40, 40, 48));
+        }
+    }
+    // ground floor: a bakery with a red awning
+    p.rect(0, h - 26, w - side, 26, rgb(30, 70, 60));
+    p.rect(6, h - 20, w - side - 12, 20, vgrad(h - 20, h, rgb(255, 226, 160), rgb(210, 160, 90)));
+    p.poly({-4, h - 30, w - side + 4, h - 30, w - side + 8, h - 20, -8, h - 20}, Paint([](double x, double) {
+        return (int(std::floor((x + 8) / 8)) & 1) ? rgb(250, 248, 240) : rgb(180, 30, 40);
+    }));
+    p.rect(20, h - 42, 80, 10, rgb(30, 70, 60));
+    p.imageCentered(ttf("BOULANGERIE", FONT_UI, 7.5, rgb(250, 220, 140), rgb(240, 200, 110), 0, 0), 60, h - 37);
+    return p.finish(rgb(36, 34, 32), 1.0);
+}
+
+Bitmap makeMorrisColumn() {   // the green Paris advertising column with posters and a little dome
+    Painter p(48, 130, SS, RENDER_SCALE, 4, 6);
+    Color green = rgb(40, 90, 70);
+    p.rect(4, 120, 40, 10, cylX(4, 44, green, 0.35, 0.5, 20));
+    p.rect(8, 30, 32, 92, Paint([=](double x, double y) {
+        Color posters[] = {rgb(240, 200, 60), rgb(220, 70, 60), rgb(70, 140, 220), rgb(240, 240, 230), rgb(200, 120, 200)};
+        int band = int(std::floor((y - 30) / 23)), col = int(std::floor((x - 8) / 11));
+        Color c = posters[(band * 2 + col) % 5];
+        if (hashNoise(std::floor(x), std::floor(y / 2)) > 0.86) c = shade(c, 0.7);   // printing
+        return cylX(8, 40, c, 0.45, 0.25, 10)(x, y);
+    }));
+    p.rect(5, 26, 38, 5, cylX(5, 43, green, 0.35, 0.6, 20));
+    p.ellipse(24, 26, 19, 17, Paint([=](double x, double y) {
+        if (y > 26) return TRANSPARENT;
+        return sphere(24, 26, 19, 17, green, 0.4, 0.5, 18)(x, y);
+    }));
+    p.ellipse(24, 8, 3, 3, sphere(24, 8, 3, 3, green, 0.4, 0.5, 18));
+    return p.finish(rgb(14, 30, 24), 0.9);
+}
+
+// ---- Germany: more half-timbered houses and a village church
+// style 0: ochre plaster, red beams, eaves to the front (a long, low farmhouse with a jettied upper floor)
+// style 1: white plaster, black beams, a tall narrow town house with St Andrew's crosses and a stepped gable
+Bitmap makeTimberHouse(int style) {
+    const bool town = style == 1;
+    const int w = town ? 110 : 170, h = town ? 230 : 160;
+    Painter p(w, h, SS, RENDER_SCALE, 6, 6);
+    Color plaster = town ? rgb(246, 244, 238) : rgb(236, 200, 120);
+    Color beam = town ? rgb(40, 32, 30) : rgb(140, 50, 36);
+    Color tile = town ? rgb(150, 70, 50) : rgb(110, 110, 120);          // town: red tiles; farm: grey slate
+    Color shutter = town ? rgb(150, 40, 40) : rgb(40, 80, 140);
+    const double side = town ? 18 : 24;
+    const double fw = w - side;
+    const double wallTop = town ? 98 : 74;
+    const int floors = town ? 3 : 2;
+    const double fh = (h - wallTop) / floors;
+    p.rect(0, wallTop, fw, h - wallTop, vgrad(wallTop, h, plaster, shade(plaster, 0.88)));
+    p.poly({fw, wallTop, double(w), wallTop - 8, double(w), double(h), fw, double(h)}, shade(plaster, 0.68));
+    const int bays = town ? 3 : 5;
+    const double bw = fw / bays;
+    for (int f = 0; f < floors; ++f) {
+        double y0 = wallTop + f * fh, y1 = y0 + fh;
+        p.rect(0, y0, fw, 4, beam);
+        for (int b = 0; b <= bays; ++b) p.rect(std::min(b * bw, fw - 4), y0, 4, fh, beam);
+        for (int b = 0; b < bays; ++b) {
+            double x0 = b * bw + 4, x1 = (b + 1) * bw;
+            double cx = (x0 + x1) / 2;
+            bool door = f == floors - 1 && b == bays / 2;
+            if (door) {
+                p.roundRect(cx - 9, y0 + 10, 18, y1 - y0 - 10, 8, vgrad(y0 + 10, y1, rgb(100, 60, 34), rgb(60, 32, 18)));
+                continue;
+            }
+            // braces: St Andrew's cross (town) or a K-brace (farm) under the window
+            if (town) { p.line(x0, y1, cx - 1, y1 - fh * 0.32, 2.4, beam); p.line(x1, y1, cx + 1, y1 - fh * 0.32, 2.4, beam);
+                        p.line(x0, y1 - fh * 0.32, x1, y1, 2.0, beam); p.line(x1, y1 - fh * 0.32, x0, y1, 2.0, beam); }
+            else      { p.line(x0, y0 + 4, cx - 8, y0 + fh * 0.45, 2.4, beam); p.line(x1, y0 + 4, cx + 8, y0 + fh * 0.45, 2.4, beam); }
+            double wy = y0 + fh * 0.2, wh = fh * 0.42;
+            p.rect(cx - 7, wy, 14, wh, vgrad(wy, wy + wh, rgb(170, 200, 226), rgb(60, 80, 110)));
+            p.rect(cx - 0.6, wy, 1.2, wh, plaster);
+            p.rect(cx - 7, wy + wh / 2, 14, 1.2, plaster);
+            p.rect(cx - 12, wy, 5, wh, shutter);
+            p.rect(cx + 7, wy, 5, wh, shutter);
+            if (!town || f == 1) {                                    // flower boxes
+                p.rect(cx - 9, wy + wh, 18, 3.5, rgb(110, 66, 40));
+                for (double fx = cx - 8; fx < cx + 8; fx += 3)
+                    p.ellipse(fx + 1, wy + wh - 0.5, 1.6, 1.6, hashNoise(fx, wy) < 0.5 ? rgb(240, 40, 60) : rgb(255, 240, 120));
+            }
+        }
+    }
+    p.rect(0, h - 4, fw, 4, beam);
+    if (town) {   // stepped gable facing the street, with a little round window
+        std::vector<double> g = {-2, wallTop + 2};
+        const int steps = 5;
+        for (int i = 0; i < steps; ++i) {
+            double x = i * fw / (2 * steps), y = wallTop - (i + 1) * (wallTop - 14) / steps;
+            g.insert(g.end(), {x, wallTop - i * (wallTop - 14) / steps, x, y});
+        }
+        for (int i = steps - 1; i >= 0; --i) {
+            double x = fw - i * fw / (2 * steps), y = wallTop - (i + 1) * (wallTop - 14) / steps;
+            g.insert(g.end(), {x, y, x, wallTop - i * (wallTop - 14) / steps});
+        }
+        g.insert(g.end(), {fw + 2, wallTop + 2});
+        p.poly(g, vgrad(14, wallTop, shade(plaster, 1.0), shade(plaster, 0.9)));
+        p.ellipse(fw / 2, wallTop - 46, 9, 9, beam);
+        p.ellipse(fw / 2, wallTop - 46, 6.5, 6.5, vgrad(wallTop - 52, wallTop - 40, rgb(170, 200, 226), rgb(60, 80, 110)));
+        for (double y : {wallTop - 22.0, wallTop - 66.0}) p.rect(fw * 0.2, y, fw * 0.6, 3, beam);
+    } else {      // the eaves face the street: a long roof with two little dormers
+        p.poly({-10, wallTop + 4, 18, 14, fw - 18, 14, fw + 10, wallTop + 4}, Paint([=](double x, double y) {
+            Color c = lerpColor(shade(tile, 1.2), shade(tile, 0.8), (y - 14) / (wallTop - 10));
+            if (std::fmod(y, 4.0) < 0.7) c = shade(c, 0.75);
+            if (std::fmod(x + std::floor(y / 4) * 3, 7.0) < 0.5) c = shade(c, 0.88);
+            return c;
+        }));
+        p.poly({fw + 10, wallTop + 4, fw - 18, 14, double(w) - 4, 8, double(w) + 4, wallTop - 6}, shade(tile, 0.6));
+        for (double cx : {fw * 0.3, fw * 0.7}) {
+            p.rect(cx - 10, 30, 20, 22, plaster);
+            p.poly({cx - 13, 32, cx, 20, cx + 13, 32}, shade(tile, 0.9));
+            p.rect(cx - 6, 36, 12, 13, vgrad(36, 49, rgb(170, 200, 226), rgb(60, 80, 110)));
+        }
+        p.rect(fw * 0.82, 2, 10, 20, cylX(fw * 0.82, fw * 0.82 + 10, rgb(160, 80, 60), 0.4, 0.2, 8));
+    }
+    return p.finish(rgb(36, 24, 16), 1.0);
+}
+
+Bitmap makeChurch() {   // a white village church with an onion-domed tower and a clock
+    const int w = 130, h = 250;
+    Painter p(w, h, SS, RENDER_SCALE, 4, 6);
+    Color wall = rgb(246, 242, 232), roof = rgb(170, 70, 50), copper = rgb(60, 140, 110);
+    // nave (to the right, partly hidden behind the tower)
+    p.rect(50, 150, 74, 100, vgrad(150, h, wall, shade(wall, 0.86)));
+    p.poly({44, 152, 87, 112, 130, 152}, vgrad(112, 152, shade(roof, 1.1), shade(roof, 0.8)));
+    for (double x : {66.0, 88.0, 110.0}) p.roundRect(x - 5, 170, 10, 30, 5, vgrad(170, 200, rgb(120, 150, 190), rgb(50, 60, 90)));
+    // tower
+    p.rect(14, 84, 44, h - 84, Paint([=](double x, double y) {
+        Color c = lerpColor(wall, shade(wall, 0.85), (y - 84) / (h - 84));
+        return x > 48 ? shade(c, 0.85) : c;
+    }));
+    for (double y : {84.0, 140.0, 196.0}) p.rect(12, y, 48, 4, rgb(220, 214, 200));
+    p.ellipse(36, 110, 13, 13, rgb(30, 40, 60));                                        // clock
+    p.ellipse(36, 110, 11, 11, rgb(240, 236, 220));
+    p.line(36, 110, 36, 102, 1.3, rgb(30, 30, 30));
+    p.line(36, 110, 42, 113, 1.3, rgb(30, 30, 30));
+    for (int i = 0; i < 12; ++i) p.ellipse(36 + std::cos(i * M_PI / 6) * 9, 110 + std::sin(i * M_PI / 6) * 9, 0.7, 0.7, rgb(40, 40, 40));
+    p.roundRect(28, 154, 16, 26, 8, vgrad(154, 180, rgb(60, 50, 50), rgb(30, 24, 24)));   // belfry opening
+    p.roundRect(26, 214, 20, h - 214, 10, vgrad(214, h, rgb(110, 70, 40), rgb(70, 40, 20)));   // door
+    // onion dome with a lantern and a cross
+    p.rect(18, 76, 36, 8, shade(copper, 0.9));
+    p.ellipse(36, 62, 20, 18, sphere(36, 62, 20, 18, copper, 0.4, 0.5, 18));
+    p.poly({24, 52, 36, 26, 48, 52}, cylX(24, 48, copper, 0.4, 0.5, 18));
+    p.rect(31, 36, 10, 12, rgb(240, 236, 226));
+    p.ellipse(36, 32, 7, 6, sphere(36, 32, 7, 6, copper, 0.4, 0.5, 18));
+    p.rect(35.2, 8, 1.6, 20, rgb(220, 190, 80));
+    p.rect(31, 14, 10, 1.6, rgb(220, 190, 80));
+    return p.finish(rgb(40, 34, 30), 1.0);
+}
+
+// ---- Tuscany: more houses and a vineyard
+// style 0: a long stone farmhouse (casale) with a loggia of arches and an outside staircase
+// style 1: a three-storey rose-pink town house with green shutters, a balcony and deep eaves
+Bitmap makeTuscanHouse(int style) {
+    const bool town = style == 1;
+    const int w = town ? 120 : 180, h = town ? 170 : 120;
+    Painter p(w, h, SS, RENDER_SCALE, 8, 6);
+    const double side = town ? 18 : 26, fw = w - side, top = town ? 30 : 46;
+    Color roof = rgb(190, 86, 50), shutter = rgb(60, 110, 70);
+    Paint wallPaint = town
+        ? Paint([=](double x, double y) {
+              Color c = lerpColor(rgb(232, 170, 150), rgb(214, 150, 130), (y - top) / (h - top));
+              return shade(c, 0.94 + 0.1 * hashNoise(x * 0.6, y * 0.6));
+          })
+        : Paint([=](double x, double y) {                                 // rough stone blocks
+              int row = int(std::floor((y - top) / 7));
+              double off = (row & 1) * 6;
+              double u = std::fmod(x + off, 12.0), v = std::fmod(y - top, 7.0);
+              Color c = shade(rgb(200, 182, 150), 0.82 + 0.26 * hashNoise(std::floor((x + off) / 12), row));
+              return (u < 0.8 || v < 0.8) ? shade(c, 0.72) : c;
+          });
+    p.rect(0, top, fw, h - top, wallPaint);
+    p.poly({fw, top, double(w), top - 6, double(w), double(h), fw, double(h)}, town ? Paint(rgb(170, 116, 100)) : Paint(rgb(150, 136, 110)));
+    // roof with deep eaves
+    p.poly({-8, top + 2, 10, top - 16, fw - 8, top - 16, fw + 8, top + 2}, Paint([=](double x, double y) {
+        Color c = lerpColor(shade(roof, 1.12), shade(roof, 0.85), (y - top + 16) / 18);
+        return std::fmod(x, 4.0) < 0.8 ? shade(c, 0.8) : c;
+    }));
+    p.poly({fw + 8, top + 2, fw - 8, top - 16, double(w), top - 20, double(w) + 4, top - 4}, shade(roof, 0.65));
+    p.rect(-8, top + 2, fw + 16, 2.5, rgb(120, 80, 60));
+    if (town) {
+        for (int f = 0; f < 3; ++f) {
+            double y = top + 12 + f * 44;
+            for (double x = 14; x < fw - 14; x += 30) {
+                bool door = f == 2 && std::fabs(x - 44) < 1;
+                if (door) { p.roundRect(x - 2, y - 2, 20, h - y + 2, 10, vgrad(y, h, rgb(90, 60, 40), rgb(50, 30, 20))); continue; }
+                p.rect(x, y, 14, 22, rgb(50, 40, 36));
+                p.rect(x - 7, y, 7, 22, shutter);
+                p.rect(x + 14, y, 7, 22, shutter);
+                for (double sy = y + 2; sy < y + 22; sy += 3) { p.rect(x - 7, sy, 7, 0.6, shade(shutter, 0.7)); p.rect(x + 14, sy, 7, 0.6, shade(shutter, 0.7)); }
+                p.rect(x - 2, y - 3, 18, 3, rgb(240, 220, 200));
+            }
+            if (f == 1) {                                               // a wrought-iron balcony with geraniums
+                p.rect(8, y + 22, fw - 16, 3, rgb(40, 36, 34));
+                for (double bx = 9; bx < fw - 8; bx += 3) p.rect(bx, y + 14, 0.8, 9, rgb(40, 36, 34));
+                for (double bx = 12; bx < fw - 10; bx += 5) p.ellipse(bx, y + 13, 2.4, 2, hashNoise(bx, y) < 0.6 ? rgb(230, 40, 50) : rgb(80, 150, 60));
+            }
+        }
+    } else {
+        // the loggia: three arches on the ground floor
+        for (int i = 0; i < 3; ++i) {
+            double x = 12 + i * 26;
+            p.roundRect(x, top + 38, 20, h - top - 38, 10, vgrad(top + 38, h, rgb(70, 50, 40), rgb(40, 28, 22)));
+        }
+        // outside staircase up to a door, with a low wall
+        p.poly({96, double(h), 140, top + 36, 148, top + 36, 148, top + 42, 104, double(h)}, shade(rgb(200, 182, 150), 0.86));
+        for (double t = 0; t < 1; t += 0.12) p.rect(96 + 44 * t, h - (h - top - 36) * t - 2, 8, 1, rgb(140, 120, 100));
+        p.roundRect(128, top + 10, 16, 26, 8, vgrad(top + 10, top + 36, rgb(100, 66, 40), rgb(60, 36, 20)));
+        for (double x : {18.0, 50.0, 82.0}) {                          // upper windows
+            p.rect(x, top + 10, 12, 16, rgb(50, 44, 40));
+            p.rect(x - 6, top + 10, 6, 16, shutter);
+            p.rect(x + 12, top + 10, 6, 16, shutter);
+        }
+        // the dovecote tower in the middle of the roof
+        p.rect(54, top - 40, 28, 26, wallPaint);
+        p.poly({50, top - 38, 68, top - 52, 86, top - 38}, vgrad(top - 52, top - 38, shade(roof, 1.1), shade(roof, 0.85)));
+        for (double x : {58.0, 66.0, 74.0}) p.roundRect(x - 2, top - 32, 4, 8, 2, rgb(40, 30, 24));
+        // potted lemon trees by the wall
+        for (double x : {4.0, 160.0}) {
+            p.rect(x, h - 10, 12, 10, cylX(x, x + 12, rgb(190, 100, 60), 0.45, 0.2, 8));
+            p.ellipse(x + 6, h - 18, 9, 9, sphere(x + 6, h - 18, 9, 9, rgb(60, 130, 60), 0.4, 0.1, 6));
+            for (int k = 0; k < 4; ++k) p.ellipse(x + 2 + k * 3, h - 20 + (k & 1) * 4, 1.5, 1.5, rgb(250, 220, 40));
+        }
+    }
+    return p.finish(rgb(50, 32, 24), 1.0);
+}
+
+Bitmap makeVines() {   // a block of vineyard rows: posts, green leafy rows and purple grapes
+    const int w = 180, h = 54;
+    Painter p(w, h, SS, RENDER_SCALE, 2, 4);
+    for (int row = 0; row < 4; ++row) {                      // back rows first, a little higher and greyer
+        double base = 30 + row * 8, k = 0.8 + row * 0.07;
+        for (double x = 4 + row * 3; x < w - 4; x += 30) p.rect(x, base - 20, 2.4, 20, rgb(120, 90, 60));
+        p.rect(0, base - 16, w, 0.8, rgb(150, 150, 150));
+        for (double x = 2; x < w - 2; x += 3.5) {
+            double r = 4 + 2.5 * hashNoise(x, row), y = base - 12 + 3 * hashNoise(x * 3, row * 7);
+            Color c = shade(lerpColor(rgb(60, 120, 40), rgb(130, 170, 60), hashNoise(x * 0.7, row)), k);
+            p.ellipse(x, y, r, r * 0.85, sphere(x, y, r, r * 0.85, c, 0.45, 0.1, 6));
+        }
+        for (double x = 8; x < w - 8; x += 9 + 6 * hashNoise(x, row + 1))
+            p.ellipse(x, base - 7, 2, 3, sphere(x, base - 7, 2, 3, shade(rgb(110, 40, 110), k), 0.4, 0.4, 12));
+    }
+    p.rect(0, h - 4, w, 4, rgb(150, 120, 80));
+    return p.finish(rgb(30, 40, 20), 0.8);
+}
+
 } // namespace
 
 void Graphics::generate() {
@@ -1319,29 +2170,34 @@ void Graphics::generate() {
     }
 
     // 0 coast
+    bg[0].push_back(cirrusLayer(rgb(255, 255, 255), 0.02, -120));
     bg[0].push_back(cloudLayer(9, rgb(255, 255, 255), 0.05, -70));
     bg[0].push_back(ridgeLayer(80, 20, 70, 2, rgb(120, 150, 210), rgb(160, 190, 228), 0.1, 0));
-    bg[0].push_back(ridgeLayer(50, 8, 40, 3, rgb(40, 160, 64), rgb(14, 110, 44), 0.25, 0));
+    bg[0].push_back(ridgeLayer(50, 8, 40, 3, rgb(40, 160, 64), rgb(14, 110, 44), 0.25, 0, 0, false, 2));
     // 1 desert
     bg[1].push_back(sunLayer(rgb(255, 252, 230), rgb(255, 225, 150), 20, false, 0.03, -100));
+    bg[1].push_back(cirrusLayer(rgb(255, 246, 236), 0.02, -110));
     bg[1].push_back(ridgeLayer(90, 20, 80, 2, rgb(160, 116, 170), rgb(200, 146, 156), 0.08, 0, 0, true));
     bg[1].push_back(mesaLayer());
     // 2 night city
     bg[2].push_back(upscaled(starLayer(0.02)));
-    bg[2].push_back(upscaled(skylineLayer(110, rgb(50, 28, 78), false, 0.06, 0)));
+    bg[2].push_back(moonLayer(700, 60, 16, 0.02, -50));
+    bg[2].push_back(upscaled(skylineLayer(120, rgb(58, 32, 88), false, 0.04, 0)));
+    bg[2].push_back(upscaled(skylineLayer(100, rgb(44, 26, 72), false, 0.08, 0)));
     bg[2].push_back(upscaled(skylineLayer(80, rgb(28, 22, 50), true, 0.15, 0)));
     // 3 snow
     bg[3].push_back(cloudLayer(7, rgb(240, 244, 252), 0.04, -80));
     bg[3].push_back(ridgeLayer(130, 40, 125, 2, rgb(116, 132, 170), rgb(156, 172, 202), 0.08, 0, rgb(252, 253, 255), true));
     bg[3].push_back(ridgeLayer(60, 10, 50, 3, rgb(240, 244, 252), rgb(212, 222, 242), 0.2, 0));
     // 4 forest
-    bg[4].push_back(ridgeLayer(80, 20, 70, 2, rgb(132, 152, 144), rgb(142, 160, 152), 0.08, 0));
+    bg[4].push_back(ridgeLayer(80, 20, 70, 2, rgb(132, 152, 144), rgb(142, 160, 152), 0.08, 0, 0, false, 2));
     bg[4].push_back(treeLineLayer(rgb(98, 124, 108), 0.15, 0));
     bg[4].push_back(treeLineLayer(rgb(58, 88, 68), 0.25, 4));
     // 5 sunset
     bg[5].push_back(sunLayer(rgb(255, 240, 120), rgb(255, 50, 120), 70, true, 0.03, 75));
     bg[5].push_back(ridgeLayer(70, 10, 60, 2, rgb(100, 44, 120), rgb(126, 52, 116), 0.08, 0));
-    bg[5].push_back(ridgeLayer(36, 4, 24, 4, rgb(64, 26, 74), rgb(74, 30, 74), 0.2, 0));
+    bg[5].push_back(ridgeLayer(36, 4, 24, 4, rgb(64, 26, 74), rgb(74, 30, 74), 0.2, 0, 0, false, 2));
+    bg[5].insert(bg[5].begin() + 1, cirrusLayer(rgb(255, 170, 200), 0.02, -100));
 
     // ---- stages 7-11: generated after the original graphics; each stage has its own random numbers, so changing
     // one stage's graphics never changes another's
@@ -1374,7 +2230,8 @@ void Graphics::generate() {
     sprite[SPR_AUTOBAHN_SIGN] = makeAutobahnSign();
     sprite[SPR_WIND_TURBINE] = makeWindTurbine();
     bg[9].push_back(cloudLayer(8, rgb(255, 255, 255), 0.05, -70));
-    bg[9].push_back(ridgeLayer(70, 20, 60, 2, rgb(110, 150, 120), rgb(130, 168, 130), 0.07, 0));
+    bg[9].push_back(ridgeLayer(110, 50, 105, 3, rgb(150, 170, 200), rgb(186, 200, 222), 0.04, 0, rgb(250, 252, 255), true));   // the Alps, far away
+    bg[9].push_back(ridgeLayer(70, 20, 60, 2, rgb(110, 150, 120), rgb(130, 168, 130), 0.07, 0, 0, false, 2));
     bg[9].push_back(castleLayer());
     bg[9].push_back(treeLineLayer(rgb(40, 96, 56), 0.25, 4));
     rng.seed(7005);
@@ -1382,7 +2239,38 @@ void Graphics::generate() {
     sprite[SPR_VILLA] = makeVilla();
     sprite[SPR_OLIVE] = makeOlive();
     // 10 Florence
-    bg[10].push_back(ridgeLayer(70, 14, 50, 2, rgb(150, 160, 150), rgb(176, 176, 150), 0.05, 0));
+    bg[10].push_back(cirrusLayer(rgb(255, 250, 240), 0.02, -110));
+    bg[10].push_back(ridgeLayer(70, 14, 50, 2, rgb(150, 160, 150), rgb(176, 176, 150), 0.05, 0, 0, false, 2));
     bg[10].push_back(florenceLayer());
     bg[10].push_back(tuscanHillsLayer());
+
+    // ---- 1.4: more roadside variety and the ambient effects, each in its own seeded block
+    rng.seed(7101);
+    sprite[SPR_DEAD_TREE] = makeDeadTree();
+    sprite[SPR_WINDPUMP] = makeWindPump();
+    sprite[SPR_DINER] = makeDiner();
+    for (int i = 0; i < TUMBLE_FRAMES; ++i) tumbleweed[i] = makeTumbleweed(i * M_PI / 4);
+    rng.seed(7102);
+    sprite[SPR_BEACH_HUT] = makeBeachHut(0);
+    sprite[SPR_BEACH_HUT2] = makeBeachHut(1);
+    sprite[SPR_LIFEGUARD] = makeLifeguard();
+    sprite[SPR_BUILDING3] = makeBuilding3();
+    sprite[SPR_CHALET] = makeChalet();
+    sprite[SPR_CABIN] = makeCabin();
+    sprite[SPR_MOTEL_SIGN] = makeMotelSign();
+    sprite[SPR_DOME] = makeDome();
+    rng.seed(7103);
+    sprite[SPR_FAVELA2] = makeFavela();          // the same builder, other random numbers: a different hillside
+    sprite[SPR_CONFETTI_CANNON] = makeConfettiCannon();
+    rng.seed(7104);
+    sprite[SPR_HAUSSMANN2] = makeHaussmann2();
+    sprite[SPR_MORRIS] = makeMorrisColumn();
+    rng.seed(7105);
+    sprite[SPR_FACHWERK2] = makeTimberHouse(0);
+    sprite[SPR_FACHWERK3] = makeTimberHouse(1);
+    sprite[SPR_CHURCH] = makeChurch();
+    rng.seed(7106);
+    sprite[SPR_VILLA2] = makeTuscanHouse(0);
+    sprite[SPR_VILLA3] = makeTuscanHouse(1);
+    sprite[SPR_VINES] = makeVines();
 }

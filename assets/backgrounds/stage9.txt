@@ -1,4 +1,4 @@
 # background layers of PARIS, back to front: layer  x y w h  parallax  yOffset
-layer  1 382 2048 180  0.04 -80
+layer  1 382 2048 220  0.04 -86
 layer  1 1 2048 380  0.06 0
-layer  1 563 2048 120  0.16 0
+layer  1 603 2048 120  0.16 0

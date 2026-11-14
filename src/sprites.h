@@ -21,6 +21,8 @@ struct Graphics {
     Bitmap lightRed, lightGreen, lightOff;     // start lights
     Bitmap lampGlow;                           // tunnel lights
     Bitmap flame;                              // nitrous exhaust flame (seen from behind)
+    static constexpr int TUMBLE_FRAMES = 8;
+    Bitmap tumbleweed[TUMBLE_FRAMES];          // a rolling tumbleweed, turned 45 degrees per frame (desert)
 
     void generate();                           // asset tool only; needs the text layer (fonts)
 };

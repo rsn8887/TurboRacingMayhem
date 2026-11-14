@@ -1,0 +1,11 @@
+# scenery atlas: name  x y w h
+favela2  820 1 288 356
+confetti_cannon  1382 1 184 332
+haussmann2  278 1 296 508
+morris  1932 1 112 272
+fachwerk2  1567 1 364 332
+fachwerk3  575 1 244 472
+church  1 1 276 512
+villa2  1 514 392 252
+villa3  1109 1 272 352
+vines  394 514 368 116

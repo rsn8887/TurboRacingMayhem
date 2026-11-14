@@ -4,6 +4,7 @@
 #include "input.h"
 #include <string>
 #include <vector>
+#include <random>
 
 struct Driver {
     std::string name;
@@ -44,6 +45,9 @@ struct Car {
     double timeLeft = 0;
     double lapStart = 0, lastLap = 0, bestLap = 0;
     double crashTimer = 0, bumpTimer = 0, shake = 0;
+    double wallScrape = 0;       // > 0: scraping along a tunnel wall (sparks), on side wallSide (-1 left, 1 right)
+    int wallSide = 0;
+    double confettiT = -99, confettiZ = -1e9;   // Brazil: when/where the last confetti cannons fired at this car
     double bgOffset = 0;
     // vertical motion (jumps)
     double alt = 0, vy = 0, air = 0;   // absolute altitude, vertical speed, height above the road
@@ -80,9 +84,19 @@ struct Options {
 enum class RacePhase { Countdown, Racing, Over };
 
 class Race {
+// a desert tumbleweed: rolls across the road in the wind, and bounces away when a car hits it
+struct Tumbleweed {
+    double dist, x;              // along the track (continuous, like Car::dist) and across (road half widths)
+    double y = 0;                // height above the road (world units)
+    double vz = 0, vx = 0, vy = 0;
+    double roll = 0, size = 600; // rolling angle (radians), diameter (world units)
+    bool hit = false;            // knocked by a car: flies, then settles and rolls on
+};
+
 public:
     Track track;
     std::vector<Car> cars;
+    std::vector<Tumbleweed> weeds;
     std::vector<int> order;    // car indices by race position
     int laps = 3;
     int humans = 0;
@@ -110,6 +124,9 @@ private:
     void collisions(double dt);
     void progress(Car& c);
     void sortOrder();
+    void updateFlair(double dt);
+    std::mt19937 flairRng_{1234};
+    double weedTimer_ = 6;    // seconds until the next gust of tumbleweeds (desert)
 };
 
 // championship points for places 1..10

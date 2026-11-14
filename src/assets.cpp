@@ -31,8 +31,10 @@ namespace { template <class T> std::string num(T v) { std::ostringstream o; o <<
 
 namespace {
 const char* const CAR_FILE[CAR_TYPES] = {"sport", "coupe", "supercar", "suv", "pickup", "sedan"};
-const char* const EFFECT_NAMES[] = {"dust", "smoke", "spark", "lamp_glow", "light_red", "light_green", "light_off", "flame"};
-constexpr int NUM_EFFECTS = 8;
+const char* const EFFECT_NAMES[] = {"dust", "smoke", "spark", "lamp_glow", "light_red", "light_green", "light_off", "flame",
+                                    "tumbleweed0", "tumbleweed1", "tumbleweed2", "tumbleweed3", "tumbleweed4", "tumbleweed5",
+                                    "tumbleweed6", "tumbleweed7"};
+constexpr int NUM_EFFECTS = 16;
 constexpr int PAD = 1;     // gap between pictures in an atlas: exactly the 1-pixel magenta line between them
 // every picture in an atlas is framed by a 1-pixel magenta rectangle just outside its area, to show where it
 // ends (neighbouring pictures share the line between them); this exact colour is never used inside a picture
@@ -230,12 +232,19 @@ const std::vector<Group>& groups() {
         {"brazil", {SPR_TROPICAL, SPR_CARNIVAL, SPR_FAVELA}},
         {"paris", {SPR_PARIS_LAMP, SPR_HAUSSMANN, SPR_CAFE, SPR_TREE_ROUND}},
         {"germany", {SPR_FACHWERK, SPR_AUTOBAHN_SIGN, SPR_WIND_TURBINE}},
+        // 1.4: more roadside variety
+        {"flair1", {SPR_DEAD_TREE, SPR_WINDPUMP, SPR_DINER, SPR_BEACH_HUT, SPR_BEACH_HUT2, SPR_LIFEGUARD, SPR_BUILDING3,
+                    SPR_CHALET, SPR_CABIN, SPR_MOTEL_SIGN, SPR_DOME}},
+        {"flair2", {SPR_FAVELA2, SPR_CONFETTI_CANNON, SPR_HAUSSMANN2, SPR_MORRIS, SPR_FACHWERK2, SPR_FACHWERK3, SPR_CHURCH,
+                    SPR_VILLA2, SPR_VILLA3, SPR_VINES}},
         {"italy", {SPR_CYPRESS, SPR_VILLA, SPR_OLIVE}},
     };
     return g;
 }
 Bitmap* effect(Graphics& g, int i) {
-    Bitmap* e[] = {&g.dust, &g.smoke, &g.spark, &g.lampGlow, &g.lightRed, &g.lightGreen, &g.lightOff, &g.flame};
+    Bitmap* e[] = {&g.dust, &g.smoke, &g.spark, &g.lampGlow, &g.lightRed, &g.lightGreen, &g.lightOff, &g.flame,
+                   &g.tumbleweed[0], &g.tumbleweed[1], &g.tumbleweed[2], &g.tumbleweed[3], &g.tumbleweed[4],
+                   &g.tumbleweed[5], &g.tumbleweed[6], &g.tumbleweed[7]};
     return e[i];
 }
 } // namespace

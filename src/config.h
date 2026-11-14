@@ -92,7 +92,7 @@ constexpr double TIME_SLACK       = 1.15;
 constexpr int    NUM_CARS      = 20;      // grid size (players + AI)
 // staggered starting grid: consecutive cars alternate left/right and are GRID_SLOT apart, so every car has
 // an empty slot in front of it on its own side of the road (2 * GRID_SLOT to the car ahead on the same side)
-constexpr double GRID_SLOT     = SEG_LEN * 5.5;
+constexpr double GRID_SLOT     = SEG_LEN * 8.0;   // roomy: space to steer round the car ahead after a turbo start
 constexpr double GRID_FRONT    = SEG_LEN * 1.5;   // pole position: this far behind the start line
 constexpr int    QUALIFY_POS   = 10;      // finish in the top 10 to continue the championship
 

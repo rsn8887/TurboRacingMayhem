@@ -706,6 +706,7 @@ int main(int argc, char** argv) {
     int winW = 0, winH = 0;
     const char* audioTest = nullptr;      // debug: render the race sound into a WAV file
     double timeLeft = -1;
+    double warpSpeed = 0.97;   // debug: speed at the --warp segment (x MAX_SPEED)
     int warp = -1, shotCar = -1, shotMenu = -1, bigF = -99, bigP = CAR_ELEV_LEVEL;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
@@ -722,6 +723,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--time") && i + 1 < argc) timeLeft = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--window") && i + 2 < argc) { winW = std::atoi(argv[++i]); winH = std::atoi(argv[++i]); }
         else if (!std::strcmp(argv[i], "--warp") && i + 1 < argc) warp = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--warpspeed") && i + 1 < argc) warpSpeed = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--info")) info = true;
         else if (!std::strcmp(argv[i], "--carsheet")) carsheet = true;
         else if (!std::strcmp(argv[i], "--telemetry") && i + 1 < argc) telemetry = std::atof(argv[++i]);
@@ -801,7 +803,7 @@ int main(int argc, char** argv) {
                     if (c.player >= 0) {
                         c.dist = warp * SEG_LEN + c.player * 600;
                         c.x = c.player ? 0.4 : -0.1;
-                        c.speed = MAX_SPEED * 0.97; c.gear = 4;
+                        c.speed = MAX_SPEED * warpSpeed; c.gear = warpSpeed < 0.3 ? 1 : 4;
                         c.alt = app.race.track.heightAt(c.dist);
                         c.cpPassed = app.race.track.checkpointCount(c.dist);
                         if (timeLeft >= 0) c.timeLeft = timeLeft;

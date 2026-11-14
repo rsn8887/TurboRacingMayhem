@@ -41,6 +41,27 @@ const SpriteInfo SPRITE_INFO[SPR_COUNT] = {
     {3600, 0.35},  // CYPRESS
     {4200, 0.95},  // VILLA
     {1700, 0.45},  // OLIVE
+    {2600, 0.12},  // DEAD_TREE
+    {4600, 0.30},  // WINDPUMP
+    {3600, 0.95},  // DINER
+    {1900, 0.90},  // BEACH_HUT
+    {1900, 0.90},  // BEACH_HUT2
+    {3000, 0.60},  // LIFEGUARD
+    {7600, 0.95},  // BUILDING3
+    {4000, 0.95},  // CHALET
+    {2800, 0.95},  // CABIN
+    {4200, 0.12},  // MOTEL_SIGN
+    {3400, 0.95},  // DOME
+    {4600, 0.95},  // FAVELA2
+    {2600, 0.20},  // CONFETTI_CANNON
+    {6400, 0.95},  // HAUSSMANN2
+    {2400, 0.80},  // MORRIS
+    {4400, 0.95},  // FACHWERK2
+    {6200, 0.95},  // FACHWERK3
+    {8500, 0.95},  // CHURCH
+    {3800, 0.95},  // VILLA2
+    {5000, 0.95},  // VILLA3
+    {1100, 0.95},  // VINES
 };
 
 const char* STAGE_NAMES[NUM_STAGES] = {
@@ -565,6 +586,19 @@ void Track::decorate(unsigned seed) {
     auto rnd = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(rng); };
     auto chance = [&](double p) { return rnd(0, 1) < p; };
     auto side = [&]() { return chance(0.5) ? -1.0 : 1.0; };
+    // 1.4 additions draw from their own random numbers, so everything placed before stays where it was
+    std::mt19937 rng2(seed * 31u + 17u);
+    auto rnd2 = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(rng2); };
+    auto side2 = [&]() { return rnd2(0, 1) < 0.5 ? -1.0 : 1.0; };
+    // house styles by district: the district changes after every tunnel. Each district has a main style and
+    // mixes in about a quarter of the next one.
+    auto district = [&](int i) { int d = 0; for (int t : tunnels_) if (i >= t) ++d; return d; };
+    auto houseOf = [&](int i, std::initializer_list<SpriteType> styles) {
+        int k = int(styles.size()), d = district(i);
+        unsigned hsh = unsigned(i) * 2654435761u;
+        int pick = (hsh >> 16) % 100 < 25 ? (d + 1) % k : d % k;
+        return *(styles.begin() + pick);
+    };
     int n = count();
     int checkpoint = int(checkpointZ / SEG_LEN);
     auto nearGantry = [&](int i) { return i < 6 || i > n - 4 || std::abs(i - checkpoint) < 6; };
@@ -611,70 +645,95 @@ void Track::decorate(unsigned seed) {
         if (!gantry && !sign && i % 120 == 60) add(i, SpriteType(billboards[bb++ % 3]), side() * rnd(1.9, 2.4));
         switch (stage) {
         case 0:
-            if (i % 6 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.6 - rnd(0, 0.4)); add(i + 3, SPR_PALM, 1.6 + rnd(0, 0.4)); }
-            if (chance(0.25)) add(i, SPR_BUSH, side() * rnd(2.6, 6.0));
-            if (chance(0.06)) add(i, SPR_PALM, side() * rnd(3.0, 7.0));
+            if (i % 10 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.6 - rnd(0, 0.4)); add(i + 5, SPR_PALM, 1.6 + rnd(0, 0.4)); }
+            if (chance(0.11)) add(i, SPR_BUSH, side() * rnd(2.6, 6.0));
+            if (chance(0.03)) add(i, SPR_PALM, side() * rnd(3.0, 7.0));
+            if (i % 70 == 35 && !gantry) {                     // a little row of beach huts
+                double sd = side2(), off = rnd2(2.7, 3.6);
+                for (int k = 0; k < 3; ++k) add(i + k * 2, (k & 1) ? SPR_BEACH_HUT2 : SPR_BEACH_HUT, sd * (off + k * 0.05));
+            }
+            if (i % 190 == 95 && !gantry && !sign) add(i, SPR_LIFEGUARD, side2() * rnd2(2.4, 3.0));
             break;
         case 1:
-            if (chance(0.12)) add(i, SPR_CACTUS, side() * rnd(1.7, 6.0));
-            if (chance(0.10)) add(i, SPR_ROCK, side() * rnd(1.6, 5.0));
+            if (chance(0.07)) add(i, SPR_CACTUS, side() * rnd(1.7, 6.0));
+            if (chance(0.05)) add(i, SPR_ROCK, side() * rnd(1.6, 5.0));
             if (i % 40 == 20 && !gantry && !sign) add(i, SPR_ROCK, side() * 1.6);
+            if (rnd2(0, 1) < 0.015) add(i, SPR_DEAD_TREE, side2() * rnd2(1.9, 6.0));
+            if (i % 110 == 55) add(i, SPR_WINDPUMP, side2() * rnd2(3.0, 6.0));
+            if (i % 260 == 130 && !gantry) add(i, SPR_DINER, side2() * rnd2(3.8, 4.4));
             break;
         case 2:
-            if (i % 8 == 0 && !gantry && !sign) { add(i, SPR_LAMP, -1.35); add(i + 4, SPR_LAMP, 1.35); }
-            if (i % 5 == 0) add(i, chance(0.5) ? SPR_BUILDING1 : SPR_BUILDING2, side() * rnd(2.8, 4.5));
-            if (chance(0.15)) add(i, chance(0.5) ? SPR_BUILDING1 : SPR_BUILDING2, side() * rnd(5.0, 8.0));
+            if (i % 20 == 0 && !gantry && !sign) { add(i, SPR_LAMP, -1.35); add(i + 10, SPR_LAMP, 1.35); }
+            if (i % 9 == 0) {
+                SpriteType b = chance(0.5) ? SPR_BUILDING1 : SPR_BUILDING2;
+                if ((unsigned(i) * 2654435761u >> 16) % 100 < 22) b = SPR_BUILDING3;   // a few neon towers
+                add(i, b, side() * rnd(2.8, 4.5));
+            }
+            if (chance(0.06)) add(i, chance(0.5) ? SPR_BUILDING1 : SPR_BUILDING2, side() * rnd(5.0, 8.0));
             break;
         case 3:
-            if (chance(0.35)) add(i, SPR_PINE_SNOW, side() * rnd(1.7, 7.0));
-            if (i % 10 == 0 && !gantry && !sign) add(i, SPR_PINE_SNOW, side() * rnd(1.6, 2.0));
+            if (chance(0.17)) add(i, SPR_PINE_SNOW, side() * rnd(1.7, 7.0));
+            if (i % 16 == 0 && !gantry && !sign) add(i, SPR_PINE_SNOW, side() * rnd(1.6, 2.0));
             if (chance(0.02)) add(i, SPR_SNOWMAN, side() * rnd(1.6, 3.0));
             if (chance(0.05)) add(i, SPR_ROCK, side() * rnd(2.0, 5.0));
+            if (i % 70 == 35 && !gantry) add(i, SPR_CHALET, side2() * rnd2(3.2, 5.0));
             break;
         case 4:
-            if (chance(0.6)) add(i, SPR_PINE, side() * rnd(1.6, 8.0));
-            if (i % 4 == 0 && !gantry && !sign) add(i, SPR_PINE, side() * rnd(1.6, 2.1));
-            if (chance(0.2)) add(i, SPR_BUSH, side() * rnd(1.6, 4.0));
+            if (chance(0.3)) add(i, SPR_PINE, side() * rnd(1.6, 8.0));
+            if (i % 7 == 0 && !gantry && !sign) add(i, SPR_PINE, side() * rnd(1.6, 2.1));
+            if (chance(0.08)) add(i, SPR_BUSH, side() * rnd(1.6, 4.0));
+            if (i % 90 == 45 && !gantry) add(i, SPR_CABIN, side2() * rnd2(3.0, 4.5));
             break;
         case 5:
-            if (i % 10 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.65); add(i, SPR_PALM, 1.65); }
-            if (i % 10 == 5 && !gantry && !sign) { add(i, SPR_LAMP, -1.35); add(i, SPR_LAMP, 1.35); }
-            if (chance(0.1)) add(i, SPR_BUSH, side() * rnd(2.5, 5.0));
+            if (i % 16 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.65); add(i, SPR_PALM, 1.65); }
+            if (i % 24 == 8 && !gantry && !sign) { add(i, SPR_LAMP, -1.35); add(i, SPR_LAMP, 1.35); }
+            if (chance(0.05)) add(i, SPR_BUSH, side() * rnd(2.5, 5.0));
             if (i % 60 == 30 && !gantry && !sign) add(i, SpriteType(billboards[bb++ % 3]), side() * rnd(2.0, 2.4));
+            if (i % 150 == 75 && !gantry && !sign) add(i, SPR_MOTEL_SIGN, side2() * 2.2);
             break;
         case 6:   // future
-            if (i % 8 == 0 && !gantry && !sign) { add(i, SPR_HOLO_PYLON, -1.35); add(i + 4, SPR_HOLO_PYLON, 1.35); }
-            if (i % 6 == 0) add(i, SPR_SCIFI_TOWER, side() * rnd(3.0, 5.0));
-            if (chance(0.12)) add(i, SPR_SCIFI_TOWER, side() * rnd(5.5, 9.0));
+            if (i % 20 == 0 && !gantry && !sign) { add(i, SPR_HOLO_PYLON, -1.35); add(i + 10, SPR_HOLO_PYLON, 1.35); }
+            if (i % 11 == 0) add(i, SPR_SCIFI_TOWER, side() * rnd(3.0, 5.0));
+            if (chance(0.05)) add(i, SPR_SCIFI_TOWER, side() * rnd(5.5, 9.0));
             if (i % 70 == 35) add(i, SPR_UFO, side() * rnd(2.2, 4.0));
             if (i % 90 == 10 && !gantry && !sign) add(i, SPR_HOLO_SIGN, side() * rnd(1.9, 2.3));
+            if (i % 110 == 55) add(i, SPR_DOME, side2() * rnd2(3.4, 6.0));
             break;
         case 7:   // Rio
-            if (i % 7 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.65 - rnd(0, 0.3)); add(i + 3, SPR_PALM, 1.65 + rnd(0, 0.3)); }
-            if (chance(0.3)) add(i, SPR_TROPICAL, side() * rnd(2.0, 5.0));
-            if (i % 14 == 7 && !gantry && !sign) add(i, SPR_CARNIVAL, side() * 1.5);
-            if (i % 9 == 4) add(i, SPR_FAVELA, side() * rnd(3.2, 6.0));
-            if (chance(0.08)) add(i, SPR_FAVELA, side() * rnd(6.0, 9.0));
+            if (i % 12 == 0 && !gantry && !sign) { add(i, SPR_PALM, -1.65 - rnd(0, 0.3)); add(i + 6, SPR_PALM, 1.65 + rnd(0, 0.3)); }
+            if (chance(0.13)) add(i, SPR_TROPICAL, side() * rnd(2.0, 5.0));
+            if (i % 30 == 15 && !gantry && !sign) add(i, SPR_CARNIVAL, side() * 1.5);
+            if (i % 15 == 4) add(i, houseOf(i, {SPR_FAVELA, SPR_FAVELA2}), side() * rnd(3.2, 6.0));
+            if (chance(0.03)) add(i, houseOf(i, {SPR_FAVELA, SPR_FAVELA2}), side() * rnd(6.0, 9.0));
+            if (i % 160 == 80 && !gantry && !sign && !isTunnel(i) && !isTunnel(i + 4)) {   // confetti cannons
+                add(i, SPR_CONFETTI_CANNON, -1.55);
+                add(i, SPR_CONFETTI_CANNON, 1.55);
+                confetti_.push_back(i);
+            }
             break;
         case 8:   // Paris
-            if (i % 8 == 0 && !gantry && !sign) { add(i, SPR_PARIS_LAMP, -1.35); add(i + 4, SPR_PARIS_LAMP, 1.35); }
-            if (i % 8 == 2 && !gantry && !sign) { add(i, SPR_TREE_ROUND, -1.9); add(i + 4, SPR_TREE_ROUND, 1.9); }
-            if (i % 7 == 0) add(i, SPR_HAUSSMANN, side() * rnd(3.2, 4.4));
-            if (chance(0.05)) add(i, SPR_HAUSSMANN, side() * rnd(5.0, 8.0));
+            if (i % 20 == 0 && !gantry && !sign) { add(i, SPR_PARIS_LAMP, -1.35); add(i + 10, SPR_PARIS_LAMP, 1.35); }
+            if (i % 14 == 5 && !gantry && !sign) { add(i, SPR_TREE_ROUND, -1.9); add(i + 7, SPR_TREE_ROUND, 1.9); }
+            if (i % 11 == 0) add(i, houseOf(i, {SPR_HAUSSMANN, SPR_HAUSSMANN2}), side() * rnd(3.2, 4.4));
+            if (chance(0.02)) add(i, houseOf(i, {SPR_HAUSSMANN, SPR_HAUSSMANN2}), side() * rnd(5.0, 8.0));
+            if (i % 90 == 40 && !gantry && !sign) add(i, SPR_MORRIS, side2() * 2.1);
             if (i % 30 == 15 && !gantry && !sign) add(i, SPR_CAFE, side() * 2.4);
             break;
         case 9:   // Germany
-            if (chance(0.35)) add(i, chance(0.6) ? SPR_PINE : SPR_TREE_ROUND, side() * rnd(2.2, 8.0));
-            if (i % 9 == 0 && !gantry && !sign) add(i, SPR_TREE_ROUND, side() * rnd(1.8, 2.2));
-            if (i % 40 == 20) add(i, SPR_FACHWERK, side() * rnd(3.5, 6.0));
+            if (chance(0.17)) add(i, chance(0.6) ? SPR_PINE : SPR_TREE_ROUND, side() * rnd(2.2, 8.0));
+            if (i % 15 == 0 && !gantry && !sign) add(i, SPR_TREE_ROUND, side() * rnd(1.8, 2.2));
+            if (i % 40 == 20) add(i, houseOf(i, {SPR_FACHWERK, SPR_FACHWERK2, SPR_FACHWERK3}), side() * rnd(3.5, 6.0));
+            if (i % 40 == 33 && rnd2(0, 1) < 0.3) add(i, houseOf(i, {SPR_FACHWERK, SPR_FACHWERK2, SPR_FACHWERK3}), side2() * rnd2(3.5, 5.5));
+            if (i % 300 == 150) add(i, SPR_CHURCH, side2() * rnd2(4.2, 6.0));
             if (i % 120 == 100 && !gantry && !sign) add(i, SPR_AUTOBAHN_SIGN, 1.7);
             if (i % 55 == 30) add(i, SPR_WIND_TURBINE, side() * rnd(5.0, 9.0));
             break;
         default:  // 10 Florence
-            if (i % 5 == 0 && !gantry && !sign) { add(i, SPR_CYPRESS, -1.7 - rnd(0, 0.2)); add(i, SPR_CYPRESS, 1.7 + rnd(0, 0.2)); }
-            if (chance(0.25)) add(i, SPR_OLIVE, side() * rnd(2.4, 7.0));
-            if (chance(0.10)) add(i, SPR_CYPRESS, side() * rnd(3.0, 8.0));
-            if (i % 35 == 17) add(i, SPR_VILLA, side() * rnd(3.4, 6.0));
+            if (i % 9 == 0 && !gantry && !sign) { add(i, SPR_CYPRESS, -1.7 - rnd(0, 0.2)); add(i, SPR_CYPRESS, 1.7 + rnd(0, 0.2)); }
+            if (chance(0.11)) add(i, SPR_OLIVE, side() * rnd(2.4, 7.0));
+            if (chance(0.04)) add(i, SPR_CYPRESS, side() * rnd(3.0, 8.0));
+            if (i % 35 == 17) add(i, houseOf(i, {SPR_VILLA, SPR_VILLA2, SPR_VILLA3}), side() * rnd(3.4, 6.0));
+            if (i % 45 == 8 && rnd2(0, 1) < 0.6) add(i, SPR_VINES, side2() * rnd2(2.8, 5.0));
             break;
         }
     }
@@ -684,7 +743,7 @@ void Track::build(int st) {
     stage = st;
     theme = makeTheme(st);
     segs.clear();
-    jumps_.clear(); narrows_.clear(); tunnels_.clear(); dirts_.clear();
+    jumps_.clear(); narrows_.clear(); tunnels_.clear(); dirts_.clear(); confetti_.clear();
     surface_ = SURF_ASPHALT;
     kerb_ = theme.kerb;
     layout(st);

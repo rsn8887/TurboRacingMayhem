@@ -1,4 +1,5 @@
 #include "render.h"
+#include <tuple>
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
@@ -38,23 +39,76 @@ inline double fogAt(const Theme& th, double z) {
 unsigned hashRand(unsigned x) { x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16; return x; }
 double frand(unsigned seed) { return (hashRand(seed) & 0xFFFF) / 65535.0; }
 
+// Background layers scaled to a view's size, made once and kept (for the current stage only, so memory stays
+// small). Area-filtered from the layer bitmap (wrapping sideways, so the copies tile without a seam).
+const Bitmap& scaledLayer(int stage, const Bitmap& src, int W, int H) {
+    static std::mutex m;
+    static int cachedStage = -1;
+    static std::map<std::tuple<const Bitmap*, int, int>, std::unique_ptr<Bitmap>> cache;
+    std::lock_guard<std::mutex> lock(m);
+    if (stage != cachedStage) { cache.clear(); cachedStage = stage; }
+    auto key = std::make_tuple(&src, W, H);
+    auto it = cache.find(key);
+    if (it != cache.end()) return *it->second;
+    auto out = std::make_unique<Bitmap>(W, H);
+    const double fx = double(src.w) / W, fy = double(src.h) / H;
+    for (int y = 0; y < H; ++y) {
+        double y0 = y * fy, y1 = (y + 1) * fy;
+        for (int x = 0; x < W; ++x) {
+            double x0 = x * fx, x1 = (x + 1) * fx;
+            double a = 0, r = 0, g = 0, b = 0, wsum = 0;
+            for (int sy = int(std::floor(y0)); sy < int(std::ceil(y1)); ++sy) {
+                if (sy < 0 || sy >= src.h) continue;
+                double wy = std::min(y1, sy + 1.0) - std::max(y0, double(sy));
+                for (int sx = int(std::floor(x0)); sx < int(std::ceil(x1)); ++sx) {
+                    double wx = std::min(x1, sx + 1.0) - std::max(x0, double(sx));
+                    Color c = src.px[size_t(sy) * src.w + size_t(((sx % src.w) + src.w) % src.w)];
+                    double wgt = wx * wy;
+                    wsum += wgt;
+                    if (!(c >> 24)) continue;                       // transparent: adds only to the weight
+                    double ca = (c >> 24) / 255.0;
+                    a += ca * wgt; r += ((c >> 16) & 255) * ca * wgt; g += ((c >> 8) & 255) * ca * wgt; b += (c & 255) * ca * wgt;
+                }
+            }
+            if (wsum <= 0 || a <= 0) continue;
+            Color c = (uint32_t(std::min(255.0, a / wsum * 255) + 0.5) << 24) | (uint32_t(r / a + 0.5) << 16) |
+                      (uint32_t(g / a + 0.5) << 8) | uint32_t(b / a + 0.5);
+            out->px[size_t(y) * W + x] = c;
+        }
+    }
+    out->computeBounds();
+    const Bitmap& ref = *out;
+    cache[key] = std::move(out);
+    return ref;
+}
+
 void drawBackground(Canvas& cv, const Rect& vp, const Theme& th, const Car& car, double horizonY, double s, int stage) {
     int hy = int(horizonY);
     for (int y = vp.y; y < vp.y + vp.h; ++y) {
         Color c;
-        if (y < hy) c = lerpColor(th.skyTop, th.skyBottom, double(y - vp.y) / std::max(1, hy - vp.y));
+        if (y < hy) {
+            // the sky stays deep overhead and brightens faster near the horizon, where a glow (city light at
+            // night) lifts it further
+            double t = double(y - vp.y) / std::max(1, hy - vp.y);
+            c = lerpColor(th.skyTop, th.skyBottom, std::pow(t, 1.35));
+            double g = std::clamp((t - 0.72) / 0.28, 0.0, 1.0);
+            if (g > 0) c = lerpColor(c, lerpColor(th.skyBottom, th.night ? rgb(255, 140, 210) : rgb(255, 255, 255), 0.3), 0.55 * g * g);
+        }
         else c = th.fogDensity > 0 ? lerpColor(th.horizonGround, th.fogColor, 0.6) : th.horizonGround;
         cv.span(vp.x, vp.x + vp.w, y, c);
     }
     for (const BgLayer& L : gfx.bg[stage]) {
-        // every layer is 1024 layout units wide, whatever resolution its bitmap has
+        // every layer is 1024 layout units wide, whatever resolution its bitmap has. It is drawn from a copy
+        // scaled to this view's size once (made on first use), so every frame takes the fast unscaled path.
         double k = 1024.0 / L.bmp.w;
-        double dw = 1024 * s, dh = L.bmp.h * k * s;
+        int W = std::max(1, int(std::lround(1024 * s))), H = std::max(1, int(std::lround(L.bmp.h * k * s)));
+        const Bitmap& B = scaledLayer(stage, L.bmp, W, H);
         double bottom = horizonY + L.yOff * s;
-        double off = std::fmod(car.bgOffset * L.parallax * 2.0 * s, dw);
-        if (off < 0) off += dw;
-        for (double x = -off; x < vp.w; x += dw)
-            cv.blitScaled(L.bmp, std::floor(vp.x + x), std::floor(bottom - dh), std::ceil(dw), dh);
+        double off = std::fmod(car.bgOffset * L.parallax * 2.0 * s, double(W));
+        if (off < 0) off += W;
+        int y = int(std::floor(bottom)) - H;
+        for (int x = -int(std::floor(off)); x < vp.w; x += W)
+            cv.blitScaled(B, double(vp.x + x), double(y), double(W), double(H));
     }
 }
 
@@ -117,8 +171,10 @@ double tunnelCarShade(double dist, double viewDepth) {
 const Color TUNNEL_BLACK = rgb(4, 4, 7);
 
 // one scanline of road. hw = half width of the road on screen (already includes the width factor w)
+// outside = the camera is not in this tunnel: the ground beside the tunnel is then the grey concrete of the
+// tunnel structure (seen beyond the entrance wall from up a hill), not the black of the inside
 void drawRoadRow(Canvas& cv, const Rect& vp, const Theme& th, int y, double cx, double hw, double w, const Segment& seg,
-                 double worldZ, double z, double span, double trackLen) {
+                 double worldZ, double z, double span, double trackLen, bool outside = false) {
     const bool tunnel = seg.tunnel;
     const bool dirt = seg.surface == SURF_DIRT;
     const double lf = lightFrac(worldZ - span / 2, worldZ + span / 2, STRIPE_LEN);   // filtered stripe
@@ -136,7 +192,9 @@ void drawRoadRow(Canvas& cv, const Rect& vp, const Theme& th, int y, double cx, 
 
     // --- verge
     if (tunnel) {
-        cv.span(vp.x, vp.x + vp.w, y, TUNNEL_BLACK);
+        Color around = TUNNEL_BLACK;
+        if (outside) { around = rgb(146, 146, 144); if (fog > 0) around = lerpColor(around, th.fogColor, fog); }   // like the portal
+        cv.span(vp.x, vp.x + vp.w, y, around);
         spanU(-TUNNEL_SIDE, TUNNEL_SIDE, F(LD(rgb(118, 116, 112), rgb(108, 106, 102))));   // concrete walkway
     } else {
         Color grass = LD(th.grassLight, th.grassDark);
@@ -301,14 +359,15 @@ void drawSideWall(Canvas& cv, double xa, double ya, double ha, double xb, double
 // the rock/concrete face around a tunnel entrance (a vertical plane at depth z)
 void drawPortal(Canvas& cv, const Rect& vp, const Theme& th, double horizonY, double focal, double depth,
                 double camY, double roadX, double roadY, double groundY, double z, double clipBottom) {
-    // a plain flat grey wall with a rectangular opening the size of the tunnel
+    // a plain flat grey wall with a rectangular opening the size of the tunnel. Looked down on from a hill, the
+    // tunnel's roof (and the hill it runs into) fills everything above the wall up to the horizon: all grey.
     double sc = depth / z * focal;                     // screen pixels per world unit at this depth
     double openHW = TUNNEL_SIDE * ROAD_WIDTH;          // half width of the opening (world)
     double fog = fogAt(th, z);
     const double wallTop = PORTAL_HEIGHT * 0.8;
     double yWallTop = horizonY - (groundY + wallTop - camY) * sc;
     double yOpenTop = horizonY - (groundY + TUNNEL_HEIGHT - camY) * sc;
-    int yTop = std::max({vp.y, cv.clip.y, int(std::ceil(yWallTop - 0.5))});
+    int yTop = std::max({vp.y, cv.clip.y, int(std::ceil(std::min(yWallTop, horizonY) - 0.5))});
     int yBot = std::min({int(std::ceil(std::min(roadY, clipBottom) - 0.5)), vp.y + vp.h, cv.clip.y + cv.clip.h});
     double xl = roadX - openHW * sc, xr = roadX + openHW * sc;
     Color c = rgb(146, 146, 144);
@@ -464,6 +523,55 @@ void drawDriftSparks(Canvas& cv, const std::vector<std::array<double, 2>>& tyres
         dot(head[0], head[1], th * 1.8, rgb(255, 250, 220), a * 0.9);   // hot head
     }
     cv.setClip(keep);
+}
+
+// Wall sparks: the car's flank grinds along a tunnel wall, so sparks spray from that side - from the rear
+// corner up the side of the body - bounce off the wall back across and behind the car and arc down onto the
+// road. Same white-hot-to-red streaks as the drift sparks; a bright flare marks the contact point.
+void drawWallSparks(Canvas& cv, const std::vector<std::array<double, 2>>& tyres, double cx, double groundY, double bw,
+                    double clip, double t, unsigned seed, int side, double strength) {
+    if (bw < 3 || strength < 0.05) return;
+    std::array<double, 2> fallback[2] = {{cx - bw * 0.38, groundY}, {cx + bw * 0.38, groundY}};
+    const std::array<double, 2>* pts = tyres.size() >= 2 ? tyres.data() : fallback;
+    std::array<double, 2> T = pts[0];                    // the rear tyre on the wall side
+    for (int k = 1; k < int(std::max<size_t>(2, tyres.size())); ++k)
+        if ((pts[k][0] - T[0]) * side > 0) T = pts[k];
+    const double ex = T[0] + side * bw * 0.1;            // the flank, just outside the tyre
+    const double th = std::max(1.0, bw * 0.013);
+    auto dot = [&](double x, double y, double sz, Color c, double a) {
+        if (y > clip) return;
+        cv.rectBlend(int(std::floor(x - sz / 2)), int(std::floor(y - sz / 2)), std::max(1, int(sz + 0.5)), std::max(1, int(sz + 0.5)), c, a);
+    };
+    // the flare where metal meets the wall
+    double fl = 0.6 + 0.4 * frand(unsigned(t * 60) * 13 + seed);
+    double fh = bw * 0.3 * fl, fw = bw * 0.14 * fl;
+    cv.blitScaled(gfx.spark, ex - fw / 2, T[1] - bw * 0.2 - fh / 2, fw, fh, false, clip, 0, 0, std::min(1.0, strength * fl));
+    const int N = bw > 60 ? 56 : bw > 20 ? 22 : 8;
+    for (int i = 0; i < N; ++i) {
+        const double life = 0.28 + 0.2 * frand(unsigned(i) * 89 + seed);
+        double ph = t / life + double(i) / N;
+        double cyc = std::floor(ph), age = ph - cyc;
+        unsigned sd = unsigned(cyc) * 139 + unsigned(i) * 23 + seed;
+        double r1 = frand(sd), r2 = frand(sd + 1), r3 = frand(sd + 2);
+        double ox = ex + (r1 - 0.5) * bw * 0.04, oy = T[1] - bw * (0.03 + 0.3 * r1);   // along the flank
+        double vx = -side * (0.2 + 1.6 * r2) * bw;                                      // off the wall, across
+        double vy = (-(0.4 + 1.0 * r3) + 1.1 * r2) * bw;                                // up, then back at us
+        const double g = 5.5 * bw;
+        auto pos = [&](double tt) { return std::array<double, 2>{ox + vx * tt, oy + vy * tt + 0.5 * g * tt * tt}; };
+        double ts = age * life;
+        std::array<double, 2> head = pos(ts), tail = pos(std::max(0.0, ts - 0.045));
+        Color c = age < 0.25 ? lerpColor(rgb(255, 255, 235), rgb(255, 225, 90), age / 0.25)
+                : age < 0.6  ? lerpColor(rgb(255, 225, 90), rgb(255, 130, 30), (age - 0.25) / 0.35)
+                             : lerpColor(rgb(255, 130, 30), rgb(200, 40, 10), (age - 0.6) / 0.4);
+        double a = strength * (age > 0.7 ? (1 - age) / 0.3 : 1.0);
+        double dx = head[0] - tail[0], dy = head[1] - tail[1];
+        int steps = std::max(1, int(std::max(std::fabs(dx), std::fabs(dy))));
+        for (int k = 0; k <= steps; ++k) {
+            double f = double(k) / steps;
+            dot(tail[0] + dx * f, tail[1] + dy * f, th, c, a * (0.25 + 0.75 * f));
+        }
+        dot(head[0], head[1], th * 1.8, rgb(255, 250, 220), a * 0.9);
+    }
 }
 
 void hudPanel(UiCanvas& cv, double x, double y, double w, double h) {
@@ -651,7 +759,6 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
     horizonY += shakeY;
 
     cv.setClip(vp);
-    drawBackground(cv, vp, th, car, horizonY, s, tr.stage);
 
     const double camZ = tr.wrap(car.dist - camBack);
     const double groundAtCar = tr.heightAt(car.dist);
@@ -660,6 +767,15 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
     const double cx = vp.x + vp.w / 2.0 + shakeX;
     const Segment& base = tr.find(camZ);
     const double basePct = (camZ - base.index * SEG_LEN) / SEG_LEN;
+
+    // how far the tunnel the camera is in reaches (0 = the camera is outside): only from inside is a tunnel exit
+    // seen as a black frame around a bright hole, and only from inside is the ground around the road black
+    int insideRun = 0;
+    while (insideRun < DRAW_DIST && tr.segs[(base.index + insideRun) % N].tunnel) ++insideRun;
+    // deep in a tunnel whose exit lies beyond the draw distance: the far end is black, not sky - only a real
+    // exit (drawn as a bright hole) may show the outside
+    if (insideRun >= DRAW_DIST) cv.rect(vp.x, vp.y, vp.w, vp.h, TUNNEL_BLACK);
+    else drawBackground(cv, vp, th, car, horizonY, s, tr.stage);
 
     double x = 0, dx = -base.curve * basePct;
     double maxy = vp.y + vp.h;
@@ -699,10 +815,42 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             // depth range covered by this scanline (for the stripe filter)
             double ta = std::clamp((p.y1 - y) / (p.y1 - p.y2), 0.0, 1.0), tb = std::clamp((p.y1 - (y + 1)) / (p.y1 - p.y2), 0.0, 1.0);
             double za = 1 / (iz1 + (iz2 - iz1) * ta), zb = 1 / (iz1 + (iz2 - iz1) * tb);
-            drawRoadRow(cv, vp, th, y, rcx, hw, wf, seg, camZ + z, z, std::fabs(zb - za), tr.length);
+            drawRoadRow(cv, vp, th, y, rcx, hw, wf, seg, camZ + z, z, std::fabs(zb - za), tr.length, n >= insideRun);
         }
         maxy = p.y2;
     }
+
+    // Seen from outside, a tunnel shows its dark inside only through the opening in its entrance wall; any other
+    // part of it in view (rising above the wall in a climbing bend, say) is the grey outside of the structure.
+    // opening[n] = the screen rectangle of the opening of the tunnel segment n belongs to (outside tunnels only).
+    struct OpenRect { double x0, y0, x1, y1; bool on; };
+    thread_local std::vector<OpenRect> openRect;
+    openRect.assign(DRAW_DIST, OpenRect{0, 0, 0, 0, false});
+    {
+        OpenRect cur{0, 0, 0, 0, false};
+        for (int n = std::max(1, insideRun); n < DRAW_DIST; ++n) {
+            const Segment& seg = tr.segs[(base.index + n) % N];
+            if (!seg.tunnel) { cur.on = false; continue; }
+            if (!tr.segs[(base.index + n + N - 1) % N].tunnel) {      // an entrance
+                const Proj& p = proj[n];
+                if (p.z1 > 1) {
+                    double sc = depth / p.z1 * focal, hwO = TUNNEL_SIDE * ROAD_WIDTH * sc;
+                    cur = {p.x1 - hwO, horizonY - (seg.y1 + TUNNEL_HEIGHT - camY) * sc, p.x1 + hwO, std::min(p.y1, p.clip), true};
+                } else cur = {0, 0, 0, 0, true};                        // behind the near plane: shows nothing
+            }
+            openRect[n] = cur;
+        }
+    }
+    const Color TUNNEL_OUTSIDE = rgb(146, 146, 144);                   // the concrete of the portal and roof
+    auto outsideColor = [&](double z) {
+        double f = fogAt(th, z);
+        return f > 0 ? lerpColor(TUNNEL_OUTSIDE, th.fogColor, f) : TUNNEL_OUTSIDE;
+    };
+    auto openRectClip = [&](const OpenRect& o) {                         // the openRect, within the current clip
+        int x0 = std::max(cv.clip.x, int(std::floor(o.x0))), y0 = std::max(cv.clip.y, int(std::floor(o.y0)));
+        int x1 = std::min(cv.clip.x + cv.clip.w, int(std::ceil(o.x1))), y1 = std::min(cv.clip.y + cv.clip.h, int(std::ceil(o.y1)));
+        return Rect{x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0)};
+    };
 
     // tunnel ceilings, front to back (each scanline belongs to the nearest ceiling slice)
     double ceilMin = vp.y;
@@ -723,7 +871,13 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             double z = 1 / (iz1 + (iz2 - iz1) * t);
             double rcx = p.x1 + (p.x2 - p.x1) * t;
             double hw = TUNNEL_SIDE * ROAD_WIDTH * focal * depth / z;
-            drawCeilingRow(cv, vp, th, y, rcx, hw, camZ + z, z);
+            if (openRect[n].on) {        // outside: grey, except what shows through the opening
+                const OpenRect& o = openRect[n];
+                Color g = outsideColor(z);
+                if (y + 0.5 < o.y0 || y + 0.5 >= o.y1) cv.span(vp.x, vp.x + vp.w, y, g);
+                else { cv.spanAA(vp.x, o.x0, y, g); cv.spanAA(o.x0, o.x1, y, TUNNEL_BLACK); cv.spanAA(o.x1, vp.x + vp.w, y, g); }
+            } else
+                drawCeilingRow(cv, vp, th, y, rcx, hw, camZ + z, z);
         }
         ceilMin = std::max(ceilMin, double(r1));     // whole rows, so thin far slices leave no gaps
     }
@@ -744,6 +898,20 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         return a.n != b.n ? a.n > b.n : a.pct > b.pct;
     });
     size_t ci = 0;
+    // tumbleweeds (desert), drawn in the same far-to-near pass as the cars
+    struct WeedRef { int n; double pct; int idx; };
+    std::vector<WeedRef> weedRefs;
+    for (int i = 0; i < int(race.weeds.size()); ++i) {
+        double rel = tr.wrap(race.weeds[i].dist) - base.index * SEG_LEN;
+        if (rel < 0) rel += tr.length;
+        int n = int(rel / SEG_LEN);
+        if (n < 1 || n >= DRAW_DIST) continue;
+        weedRefs.push_back({n, rel / SEG_LEN - n, i});
+    }
+    std::sort(weedRefs.begin(), weedRefs.end(), [](const WeedRef& a, const WeedRef& b) {
+        return a.n != b.n ? a.n > b.n : a.pct > b.pct;
+    });
+    size_t wi = 0;
 
     // Tunnel lamps are collected while the walls are drawn and drawn last, each one only if no nearer tunnel
     // wall (or the wall around a tunnel entrance) is in front of it. Drawing them in the normal far-to-near
@@ -803,6 +971,17 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         double x1 = cx + s1 * (p.rx1 + (p.rx2 - p.rx1) * t1);   // perspective-correct near end
         double y1 = horizonY - s1 * (seg.y1 + (seg.y2 - seg.y1) * t1 - camY);
         double w1 = seg.w1 + (seg.w2 - seg.w1) * t1;
+        Rect keepClip = cv.clip;
+        if (seg.tunnel && openRect[n].on) {
+            Color g = outsideColor(p.z1);
+            for (int sgn : {-1, 1}) {
+                double off = sgn * TUNNEL_SIDE * ROAD_WIDTH;
+                double xa = x1 + off * w1 * s1, xb = p.x2 + off * seg.w2 * s2;
+                drawSideWall(cv, xa, y1, TUNNEL_HEIGHT * s1, xb, p.y2, TUNNEL_HEIGHT * s2, p.clip,
+                    [&](int x, double top, double bot, double, double clipB) { cv.vspanAA(x, top, bot, g, clipB); });
+            }
+            cv.setClip(openRectClip(openRect[n]));
+        }
         if (seg.tunnel) {
             // the walls above the barriers, up to the ceiling: solid black, so in bends they hide whatever is
             // behind them (the tunnel further on, its lamps, cars)
@@ -851,6 +1030,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 double ceilY = horizonY - sc * (seg.y1 + TUNNEL_HEIGHT - 60 - camY);
                 add(p.x1, ceilY, 260 * sc, 45 * sc, 460 * sc);                          // long ceiling fitting
             }
+            cv.setClip(keepClip);
         } else {   // guardrail: W-beam on posts
             for (int sgn : {-1, 1}) {
                 double off = sgn * RAIL_POS * ROAD_WIDTH;
@@ -876,6 +1056,53 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         }
     };
 
+    // A tunnel seen from outside and above (coming down a hill): a solid concrete roof over it, so its dark
+    // inside never shows. Drawn after the segment's walls and cars, which it covers.
+    auto drawRoof = [&](int n) {
+        const Proj& p = proj[n];
+        const Segment& seg = tr.segs[(base.index + n) % N];
+        if (!seg.tunnel || n < insideRun || p.z1 <= 1) return;
+        const double roofH = TUNNEL_HEIGHT + 120;
+        if (camY <= std::min(seg.y1, seg.y2) + roofH) return;          // looking at it from below: no roof to see
+        double s1 = depth / p.z1 * focal, s2 = depth / p.z2 * focal;
+        double ya = horizonY - s1 * (seg.y1 + roofH - camY), yb = horizonY - s2 * (seg.y2 + roofH - camY);
+        if (yb >= ya) return;
+        const double side = TUNNEL_SIDE * 1.1 * ROAD_WIDTH;
+        double hwa = side * seg.w1 * s1, hwb = side * seg.w2 * s2;
+        double fog = fogAt(th, p.z1);
+        auto F = [&](Color c) { return fog > 0 ? lerpColor(c, th.fogColor, fog) : c; };
+        Color slab = F(rgb(146, 146, 144)), edge = F(rgb(124, 124, 120)), seam = F(rgb(136, 136, 132));
+        bool seamRow = seg.index % 4 == 0;                              // joints between the precast sections
+        int y0 = std::max({vp.y, cv.clip.y, int(std::ceil(yb - 0.5))});
+        double bottom = std::min(ya, p.clip);
+        if (!tr.segs[(base.index + n + N - 1) % N].tunnel)             // the entrance: the portal wall is in front
+            bottom = std::min(bottom, horizonY - s1 * (seg.y1 + PORTAL_HEIGHT * 0.8 - camY));
+        int y1 = std::min({int(std::ceil(bottom - 0.5)), vp.y + vp.h, cv.clip.y + cv.clip.h});
+        for (int y = y0; y < y1; ++y) {
+            double t = (y + 0.5 - yb) / (ya - yb);                     // 0 far .. 1 near
+            double xc = p.x2 + (p.x1 - p.x2) * t, hw = hwb + (hwa - hwb) * t;
+            cv.spanAA(xc - hw, xc + hw, y, seamRow && t > 0.85 ? seam : slab);
+            cv.spanAA(xc - hw, xc - hw * 0.9, y, edge);                // parapets along both sides
+            cv.spanAA(xc + hw * 0.9, xc + hw, y, edge);
+        }
+    };
+
+    // A tunnel that runs on past the draw distance gets a black end cap across it at the last drawn segment, so
+    // the background never shows at its far end as if there were an exit (from inside, or through the entrance)
+    {
+        const int n = DRAW_DIST - 1;
+        const Proj& p = proj[n];
+        const Segment& seg = tr.segs[(base.index + n) % N];
+        if (seg.tunnel && p.z2 > 1) {
+            double s2 = depth / p.z2 * focal;
+            double hw = TUNNEL_SIDE * ROAD_WIDTH * seg.w2 * s2 + 1;
+            double yCeil = horizonY - s2 * (seg.y2 + TUNNEL_HEIGHT - camY) - 1;
+            int y0 = std::max(vp.y, int(std::floor(yCeil)));
+            int y1 = std::min(vp.y + vp.h, int(std::ceil(std::min(p.y2 + 1, p.clip))));
+            for (int y = y0; y < y1; ++y) cv.spanAA(p.x2 - hw, p.x2 + hw, y, TUNNEL_BLACK);
+        }
+    }
+
     // sprites back to front
     for (int n = DRAW_DIST - 1; n >= 1; --n) {
         const Proj& p = proj[n];
@@ -883,7 +1110,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         if (seg.tunnel && p.z2 > 1) {
             const Segment& next = tr.segs[(base.index + n + 1) % N];
             const Segment& prev = tr.segs[(base.index + n - 1 + N) % N];
-            if (!next.tunnel) {          // exit hole seen from inside
+            if (!next.tunnel && n < insideRun) {          // exit hole seen from inside
                 double s2 = depth / p.z2;
                 double cy2 = horizonY - s2 * (seg.y2 + TUNNEL_HEIGHT - camY) * focal;
                 drawExitFace(cv, vp, th, p.x2, TUNNEL_SIDE * ROAD_WIDTH * s2 * focal, cy2, p.y2, p.z2, p.clip);
@@ -913,6 +1140,27 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 if (!lamps.empty()) flushLampsBehind({sx - dw / 2, p.y1 - dh, sx + dw / 2, p.y1});
                 cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, fog, th.fogColor);
             }
+        }
+        while (wi < weedRefs.size() && weedRefs[wi].n > n) ++wi;
+        while (wi < weedRefs.size() && weedRefs[wi].n == n) {
+            const WeedRef& r = weedRefs[wi++];
+            const auto& w = race.weeds[r.idx];
+            double z = p.z1 + r.pct * SEG_LEN;
+            if (z <= 1) continue;
+            double sc = depth / z * focal;
+            double gx = p.x1 + (p.x2 - p.x1) * r.pct + w.x * ROAD_WIDTH * sc;
+            double gy = p.y1 + (p.y2 - p.y1) * r.pct;
+            double size = w.size * sc;
+            if (size < 1.5 || gx + size < vp.x || gx - size > vp.x + vp.w) continue;
+            double fog = fogAt(th, z);
+            // soft shadow on the road, smaller and fainter the higher it flies
+            double lift = std::clamp(1 - w.y / 2500, 0.3, 1.0);
+            cv.blitScaled(gfx.smoke, gx - size * 0.5 * lift, gy - size * 0.12, size * lift, size * 0.22, false, p.clip, 1.0, rgb(40, 28, 16), 0.45 * lift);
+            const int F = Graphics::TUMBLE_FRAMES;
+            int fr = int(std::floor(w.roll / (2 * M_PI / F)));
+            fr = ((fr % F) + F) % F;
+            double by = gy - w.y * sc;
+            cv.blitScaled(gfx.tumbleweed[fr], gx - size / 2, by - size, size, size, false, p.clip, fog, th.fogColor);
         }
         while (ci < carRefs.size() && carRefs[ci].n == n) {
             const CarRef& r = carRefs[ci++];
@@ -951,6 +1199,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 }
             }
         }
+        drawRoof(n);
         cv.setClip(vp);
     }
     drawWalls(0);
@@ -973,20 +1222,74 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         double bw = CAR_WORLD_W * sc * focal, bh = bw * 0.45;
         // dust / tyre smoke (soft alpha puffs drifting up and back)
         bool dust = (car.offroad || (car.onDirt && !car.airborne)) && car.speed > 400;
-        bool smoke = car.skid > 0.3 && (car.speed > 2000 * SPEED_SCALE || car.startBog > 0);   // wheelspin on the grid too
+        const bool wallSparks = car.wallScrape > 0 && car.speed > 1500 * SPEED_SCALE;    // grinding along a tunnel wall
+        bool smoke = !wallSparks && car.skid > 0.3 && (car.speed > 2000 * SPEED_SCALE || car.startBog > 0);   // wheelspin on the grid too
         const bool drift = car.drifting && !car.airborne && !dust;
         if (drift)                                          // drifting: a shower of sparks instead of smoke
             drawDriftSparks(cv, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101, car.driftVis, 0);
         else if (dust || smoke)
             drawTyreSmoke(cv, dust ? gfx.dust : gfx.smoke, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101,
                           tint, TUNNEL_BLACK);
-        if (car.bumpTimer > 0) {
+        if (wallSparks)
+            drawWallSparks(cv, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101 + 7, car.wallSide,
+                           std::min(1.0, car.wallScrape / 0.15));
+        else if (car.bumpTimer > 0) {
             for (int i = 0; i < 5; ++i) {
                 unsigned sd = opt.frame * 17 + i * 13;
                 double px = cx + (frand(sd) - 0.5) * bw * 0.9;
                 double py = by - bh * (0.6 + frand(sd + 3) * 0.6);
                 double sz = 10 * s * (0.5 + frand(sd + 5));
                 cv.blitScaled(gfx.spark, px - sz / 2, py - sz / 2, sz, sz);
+            }
+        }
+    }
+
+    // ---- ambient flair, in front of everything: confetti (Rio)
+    {
+        // camera-space particles: screen position of a point X (world units across), Y (height above the road
+        // at the camera), Z (ahead of the camera)
+        const double kz = depth * focal;
+        auto scr = [&](double X, double Y, double Z, double& sx, double& sy) {
+            sx = cx + X / Z * kz;
+            sy = horizonY + (CAMERA_HEIGHT + camRise - Y) / Z * kz;
+        };
+        // confetti: a burst from the cannons that the car drives through - pieces shoot out across the road and
+        // towards us, then flutter down slowly, turning over and over
+        double age = race.time - car.confettiT;
+        if (tr.stage == 7 && age >= 0 && age < 4.5) {
+            static const Color cols[] = {rgb(255, 50, 140), rgb(0, 190, 255), rgb(255, 225, 0), rgb(150, 70, 255), rgb(0, 215, 120),
+                                         rgb(255, 120, 30), rgb(255, 255, 255)};
+            double zRelBase = car.confettiZ - (car.dist - camBack);
+            for (int i = 0; i < 420; ++i) {
+                double r0 = frand(i * 11 + 1), r1 = frand(i * 11 + 2), r2 = frand(i * 11 + 3), r3 = frand(i * 11 + 4), r4 = frand(i * 11 + 5);
+                double side = (i & 1) ? 1 : -1;
+                double delay = r4 * 0.35;                  // the cannons keep firing for a moment
+                double a = age - delay;
+                if (a < 0) continue;
+                // launch from the cannon mouth (about 2400 high, just off the road), with drag towards a slow fall
+                double k = 1.3, e = (1 - std::exp(-k * a)) / k;
+                double vx = -side * (1200 + 5200 * r0), vz = -(2500 + 9000 * r1), vy = -600 + 1700 * r2;
+                double X = side * 1.55 * ROAD_WIDTH + vx * e + std::sin(a * (3 + r3 * 4) + r0 * 6) * 140;
+                double Zw = zRelBase + vz * e;
+                double Y = 1500 + vy * e - 420 * a;
+                if (Y < 0) continue;
+                // follow the road through bends: offset by the road centre at that distance
+                if (Zw < 380) continue;                  // fades out just before it reaches the camera
+                int n = int(Zw / SEG_LEN);
+                if (n < 1 || n >= DRAW_DIST - 1) continue;
+                const Proj& pp = proj[n];
+                double pct = Zw / SEG_LEN - n;
+                double roadX = (pp.x1 + (pp.x2 - pp.x1) * pct - cx) / kz * Zw;   // road centre, in camera space
+                double sx, sy;
+                scr(X + roadX, Y + (tr.heightAt(car.dist - camBack + Zw) - groundAtCar), Zw, sx, sy);
+                if (sy > pp.clip) continue;
+                double sz = std::min(75 / Zw * kz, 13.0 * s);
+                double spin = std::cos(a * (6 + 10 * r3) + r0 * 6.28);
+                double w = std::max(1.0, sz * std::max(0.15, std::fabs(spin))), h = std::max(1.0, sz * 0.6);
+                Color c = cols[i % 7];
+                if (spin < 0) c = shade(c, 0.7);         // the back of the paper is darker
+                double fade = std::min(1.0, (4.5 - age) / 1.0) * std::min(1.0, (Zw - 380) / 500);
+                cv.rectBlend(int(sx - w / 2), int(sy - h / 2), int(std::ceil(w)), int(std::ceil(h)), c, 0.95 * fade);
             }
         }
     }

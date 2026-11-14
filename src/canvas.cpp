@@ -3,6 +3,20 @@
 #include <cmath>
 
 // ---------------------------------------------------------------- Bitmap ----
+namespace {
+// src over an opaque dst without divisions (the renderer's hot loops): alpha 0..255 -> weight 0..256, two
+// channels per multiply. Within 1/255 of blendOver; blendOver itself stays as it is for asset generation.
+inline Color blendFast(Color d, Color s) {
+    unsigned a = s >> 24;
+    if (a == 255) return s;
+    if (!a) return d;
+    unsigned f = a + (a >> 7), g = 256 - f;
+    Color rb = (((d & 0x00FF00FFu) * g + (s & 0x00FF00FFu) * f) >> 8) & 0x00FF00FFu;
+    Color gg = ((((d >> 8) & 0xFFu) * g + ((s >> 8) & 0xFFu) * f)) & 0x0000FF00u;
+    return 0xFF000000u | rb | gg;
+}
+} // namespace
+
 void Bitmap::fill(Color c) { std::fill(px.begin(), px.end(), c); }
 
 void Bitmap::fillRect(int x, int y, int rw, int rh, Color c) {
@@ -131,14 +145,14 @@ void Canvas::spanAA(double x0, double x1, int y, Color c) {
     Color* row = &px[size_t(y) * w];
     int i0 = int(std::floor(x0)), i1 = int(std::floor(x1));
     if (i0 == i1) {                                   // inside one pixel
-        if (i0 >= clip.x && i0 < clip.x + clip.w) row[i0] = blendOver(row[i0], withAlpha(c, int((x1 - x0) * 255)));
+        if (i0 >= clip.x && i0 < clip.x + clip.w) row[i0] = blendFast(row[i0], withAlpha(c, int((x1 - x0) * 255)));
         return;
     }
     double cov0 = (i0 + 1) - x0;                      // left edge coverage
-    if (i0 >= clip.x) row[i0] = blendOver(row[i0], withAlpha(c, int(cov0 * 255)));
+    if (i0 >= clip.x) row[i0] = blendFast(row[i0], withAlpha(c, int(cov0 * 255)));
     for (int x = i0 + 1; x < i1; ++x) row[x] = c;
     double cov1 = x1 - i1;
-    if (i1 < clip.x + clip.w && cov1 > 0) row[i1] = blendOver(row[i1], withAlpha(c, int(cov1 * 255)));
+    if (i1 < clip.x + clip.w && cov1 > 0) row[i1] = blendFast(row[i1], withAlpha(c, int(cov1 * 255)));
 }
 
 void Canvas::vspanAA(int x, double y0, double y1, Color c, double clipBottom) {
@@ -147,11 +161,11 @@ void Canvas::vspanAA(int x, double y0, double y1, Color c, double clipBottom) {
     y1 = std::min({y1, double(clip.y + clip.h), clipBottom});
     if (y1 <= y0) return;
     int i0 = int(std::floor(y0)), i1 = int(std::floor(y1));
-    if (i0 == i1) { Color& d = px[size_t(i0) * w + x]; d = blendOver(d, withAlpha(c, int((y1 - y0) * 255))); return; }
-    { Color& d = px[size_t(i0) * w + x]; d = blendOver(d, withAlpha(c, int(((i0 + 1) - y0) * 255))); }
+    if (i0 == i1) { Color& d = px[size_t(i0) * w + x]; d = blendFast(d, withAlpha(c, int((y1 - y0) * 255))); return; }
+    { Color& d = px[size_t(i0) * w + x]; d = blendFast(d, withAlpha(c, int(((i0 + 1) - y0) * 255))); }
     for (int y = i0 + 1; y < i1; ++y) px[size_t(y) * w + x] = c;
     double cov1 = y1 - i1;
-    if (cov1 > 0 && i1 < clip.y + clip.h) { Color& d = px[size_t(i1) * w + x]; d = blendOver(d, withAlpha(c, int(cov1 * 255))); }
+    if (cov1 > 0 && i1 < clip.y + clip.h) { Color& d = px[size_t(i1) * w + x]; d = blendFast(d, withAlpha(c, int(cov1 * 255))); }
 }
 
 void Canvas::rect(int x, int y, int rw, int rh, Color c) {
@@ -161,12 +175,21 @@ void Canvas::rect(int x, int y, int rw, int rh, Color c) {
 void Canvas::rectBlend(int x, int y, int rw, int rh, Color c, double a) {
     int x0 = std::max(x, clip.x), x1 = std::min(x + rw, clip.x + clip.w);
     int y0 = std::max(y, clip.y), y1 = std::min(y + rh, clip.y + clip.h);
-    Color s = withAlpha(c, int(a * 255));
-    for (int yy = y0; yy < y1; ++yy)
+    if (x0 >= x1 || y0 >= y1) return;
+    int ai = std::clamp(int(a * 255), 0, 255);
+    if (ai == 0) return;
+    // the source premultiplied once; per pixel only the destination is scaled (two channels per multiply)
+    const unsigned f = unsigned(ai + (ai >> 7)), g = 256 - f;
+    const Color srb = (c & 0x00FF00FFu) * f, sg = ((c >> 8) & 0xFFu) * f;
+    for (int yy = y0; yy < y1; ++yy) {
+        Color* row = &px[size_t(yy) * w];
         for (int xx = x0; xx < x1; ++xx) {
-            Color& d = px[size_t(yy) * w + xx];
-            d = blendOver(d, s);
+            Color d = row[xx];
+            Color rb = (((d & 0x00FF00FFu) * g + srb) >> 8) & 0x00FF00FFu;
+            Color gg = (((d >> 8) & 0xFFu) * g + sg) & 0x0000FF00u;
+            row[xx] = 0xFF000000u | rb | gg;
         }
+    }
 }
 
 void Canvas::vgradRect(int x, int y, int rw, int rh, Color top, Color bottom, double a) {

@@ -15,6 +15,14 @@ enum SpriteType {
     SPR_PARIS_LAMP, SPR_HAUSSMANN, SPR_CAFE, SPR_TREE_ROUND,          // Paris (round tree also in Germany)
     SPR_FACHWERK, SPR_AUTOBAHN_SIGN, SPR_WIND_TURBINE,                // Germany
     SPR_CYPRESS, SPR_VILLA, SPR_OLIVE,                                // Tuscany
+    // 1.4: more roadside variety (appended again)
+    SPR_DEAD_TREE, SPR_WINDPUMP, SPR_DINER,                           // desert
+    SPR_BEACH_HUT, SPR_BEACH_HUT2, SPR_LIFEGUARD,                     // coast
+    SPR_BUILDING3, SPR_CHALET, SPR_CABIN, SPR_MOTEL_SIGN, SPR_DOME,   // night city, snow, forest, sunset, future
+    SPR_FAVELA2, SPR_CONFETTI_CANNON,                                 // Brazil
+    SPR_HAUSSMANN2, SPR_MORRIS,                                       // Paris
+    SPR_FACHWERK2, SPR_FACHWERK3, SPR_CHURCH,                         // Germany
+    SPR_VILLA2, SPR_VILLA3, SPR_VINES,                                // Tuscany
     SPR_COUNT
 };
 
@@ -132,6 +140,7 @@ private:
 public:
     std::vector<int> dirts_;
     std::vector<int> jumps_, narrows_, tunnels_;   // segment indices of features (signs, debugging)
+    std::vector<int> confetti_;                    // Brazil: pairs of confetti cannons that fire at passing players
     void downhillToEnd(int n);
     void layout(int stage);
     void decorate(unsigned seed);

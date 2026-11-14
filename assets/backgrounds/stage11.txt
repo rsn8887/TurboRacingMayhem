@@ -1,4 +1,5 @@
 # background layers of FLORENCE, back to front: layer  x y w h  parallax  yOffset
+layer  1 443 2048 120  0.02 -110
 layer  1 302 2048 140  0.05 0
 layer  1 1 2048 300  0.08 0
-layer  1 443 2048 120  0.2 0
+layer  1 564 2048 120  0.2 0

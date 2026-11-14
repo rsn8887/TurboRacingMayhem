@@ -134,6 +134,8 @@ constexpr Difficulty DIFFICULTY[3] = {
 };
 
 void Race::start(int stage, const std::vector<Driver>& drivers, const Options& opt, bool attractMode) {
+    weeds.clear();
+    weedTimer_ = 6;
     attract = attractMode;
     difficulty_ = attract ? 1 : std::clamp(opt.difficulty, 0, 2);
     track.build(stage);
@@ -182,7 +184,7 @@ void Race::start(int stage, const std::vector<Driver>& drivers, const Options& o
         int col = g % 2;                       // pole on the left, then alternating sides
         c.dist = -GRID_FRONT - g * GRID_SLOT;
         if (attract) c.dist += SEG_LEN * 40;
-        c.x = col ? 0.42 : -0.42;
+        c.x = col ? 0.5 : -0.5;               // two columns with a clear lane between them
         c.targetX = c.x;
         c.laneTimer = rnd(2, 6);
         c.timeLeft = bonusA_ + 8;
@@ -267,6 +269,7 @@ void Race::update(double dt, const PlayerInput in[2]) {
     collisions(dt);
     for (auto& c : cars) progress(c);
     sortOrder();
+    updateFlair(dt);
 
     if (!attract && humans > 0) {
         bool allDone = true;
@@ -458,6 +461,12 @@ void Race::updateHuman(Car& c, const PlayerInput& inRaw, double dt) {
             c.bumpTimer = 0.2;
             c.shake = std::max(c.shake, 0.3);
             c.skid = 0.9;
+            if (seg.tunnel) {
+                c.wallScrape = 0.25; c.wallSide = c.x > 0 ? 1 : -1;   // metal on concrete: sparks
+                // the wall decides where the car points: along it, or away from it, but never into it
+                if (c.steerVis * c.wallSide > 0) c.steerVis = 0;
+                if (c.driftVis * c.wallSide > 0) { c.driftVis = 0; c.drifting = false; }
+            }
         }
     }
 
@@ -668,6 +677,7 @@ void Race::physicsCommon(Car& c, double dt) {
     c.landTimer = std::max(0.0, c.landTimer - dt);
     if (c.msgTimer > 0) c.msgTimer -= dt;
     c.bumpTimer = std::max(0.0, c.bumpTimer - dt);
+    c.wallScrape = std::max(0.0, c.wallScrape - dt);
     c.shake = std::max(0.0, c.shake - dt * 2);
 }
 
@@ -748,4 +758,103 @@ void Race::progress(Car& c) {
             audio.play(SFX_CHECKPOINT);
         }
     }
+}
+
+// ------------------------------------------------------------ flair -----
+// Tumbleweeds in the desert, confetti cannons in Rio. Tumbleweeds spawn ahead of the human players (or the car
+// the attract camera follows), roll across the road in the wind with little hops, and fly off when a car hits
+// them. The confetti cannons fire when a player comes close; the renderer draws the shower from when and where.
+void Race::updateFlair(double dt) {
+    auto R = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(flairRng_); };
+    std::vector<int> foci;
+    for (int i = 0; i < int(cars.size()); ++i) if (cars[i].player >= 0) foci.push_back(i);
+    if (foci.empty() && !cars.empty()) {
+        int best = 0;
+        for (int i = 0; i < int(cars.size()); ++i) if (cars[i].skill > cars[best].skill) best = i;
+        foci.push_back(best);
+    }
+
+    // confetti: fire about 1.3 s before a player reaches a pair of cannons (once per pass)
+    if (!track.confetti_.empty())
+        for (int fi : foci) {
+            Car& c = cars[fi];
+            for (int seg : track.confetti_) {
+                double d = track.wrap(seg * SEG_LEN - c.dist);
+                if (d > 0 && d < std::max(18 * SEG_LEN, c.speed * 1.3)) {
+                    double z = c.dist + d;
+                    if (std::fabs(z - c.confettiZ) > SEG_LEN) { c.confettiZ = z; c.confettiT = time; }
+                }
+            }
+        }
+
+    if (track.stage != 1) { weeds.clear(); return; }
+    // tumbleweeds come in gusts: a group of one, two or three blows across the road together, then the wind
+    // drops - sometimes for a few seconds, often for much longer
+    weedTimer_ -= dt;
+    if (weedTimer_ <= 0) {
+        double g = R(0, 1);
+        int group = g < 0.5 ? 1 : g < 0.82 ? 2 : 3;
+        double sd = R(0, 1) < 0.5 ? -1 : 1;               // the whole group comes from the same side, with the wind
+        double windV = R(0.9, 1.7);
+        for (int fi : foci) {
+            const Car& c = cars[fi];
+            double z0 = c.dist + R(100, 140) * SEG_LEN;
+            for (int k = 0; k < group; ++k) {
+                Tumbleweed w;
+                w.dist = z0 + k * R(6, 14) * SEG_LEN;     // strung out along the road
+                if (track.find(w.dist).tunnel) continue;
+                w.x = sd * (R(2.0, 3.0) + k * R(0.3, 0.9)); // the later ones a little behind in the gust
+                w.vx = -sd * windV * R(0.85, 1.15);       // blown across the road (half widths per second)
+                w.vz = R(-400, 400);
+                w.size = R(620, 900);
+                w.roll = R(0, 6.28);
+                weeds.push_back(w);
+            }
+        }
+        weedTimer_ = R(0, 1) < 0.35 ? R(5, 9) : R(16, 34);   // short lull, or a long calm
+    }
+    for (Tumbleweed& w : weeds) {
+        if (w.hit) {                                      // flying after a hit: gravity, air drag, bounces
+            w.vy -= 5200 * dt;
+            w.y += w.vy * dt;
+            double drag = std::exp(-1.6 * dt);
+            w.vz *= drag; w.vx *= drag;
+            if (w.y <= 0) {
+                w.y = 0;
+                if (std::fabs(w.vy) > 600) w.vy = -w.vy * 0.45; else { w.vy = 0; w.hit = std::fabs(w.vz) > 1500; }
+            }
+        } else {                                          // rolling: little hops
+            double hopPhase = w.roll * 0.5;
+            w.y = std::fabs(std::sin(hopPhase)) * w.size * 0.25;
+        }
+        w.dist += w.vz * dt;
+        w.x += w.vx * dt;
+        // it rolls as far as it travels (sideways or along the road)
+        double travel = std::hypot(w.vx * ROAD_WIDTH, w.vz * 0.3);
+        w.roll += travel * dt / (w.size * 0.5) * (w.vx >= 0 ? 1 : -1);
+        // cars knock it flying: forwards with the car, up and away to the side
+        if (!w.hit && w.y < 500)
+            for (const Car& c : cars) {
+                double dz = w.dist - c.dist;
+                if (dz < -CAR_LEN * 0.5 || dz > CAR_LEN * 0.8 || std::fabs(w.x - c.x) > CAR_HALF + w.size / ROAD_WIDTH * 0.4) continue;
+                if (c.speed < 1500) continue;
+                w.hit = true;
+                w.vz = c.speed * R(1.05, 1.25);
+                w.vy = R(1800, 2800) * std::min(1.0, c.speed / (MAX_SPEED * 0.6));
+                w.vx = (w.x >= c.x ? 1 : -1) * R(0.8, 1.8) + c.vx * 0.5;
+                for (const Car& o : cars)   // heard when it happens near a human player
+                    if (o.player >= 0 && std::fabs(delta(o.dist, w.dist)) < 15 * SEG_LEN) { audio.play(SFX_TUMBLEWEED); break; }
+                break;
+            }
+    }
+    // gone when it has left the road far behind every focus car, too far ahead, or blown far off the side
+    weeds.erase(std::remove_if(weeds.begin(), weeds.end(), [&](const Tumbleweed& w) {
+        if (std::fabs(w.x) > 5.5) return true;
+        bool near = false;
+        for (int fi : foci) {
+            double d = w.dist - cars[fi].dist;
+            if (d > -6 * SEG_LEN && d < 220 * SEG_LEN) near = true;
+        }
+        return !near;
+    }), weeds.end());
 }

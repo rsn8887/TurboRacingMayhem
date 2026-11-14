@@ -1,4 +1,4 @@
 # scenery atlas: name  x y w h
 lamp  194 1 152 404
-building1  1 1 192 468
-building2  347 1 256 364
+building1  1 1 192 480
+building2  347 1 256 376

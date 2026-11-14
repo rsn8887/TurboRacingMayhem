@@ -1,5 +1,6 @@
 # background layers of AUTOBAHN, back to front: layer  x y w h  parallax  yOffset
-layer  1 302 2048 180  0.05 -70
-layer  1 483 2048 140  0.07 0
+layer  1 302 2048 220  0.05 -76
+layer  1 523 2048 220  0.04 0
+layer  1 744 2048 140  0.07 0
 layer  1 1 2048 300  0.1 0
-layer  1 624 2048 128  0.25 4
+layer  1 885 2048 128  0.25 4
