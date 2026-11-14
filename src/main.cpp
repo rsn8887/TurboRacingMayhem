@@ -649,6 +649,9 @@ PlayerInput pilotInput(const Race& r, int idx, double caution) {
     }
     in.throttle = c.speed < target ? 1 : 0;
     in.brake = c.speed > target * 1.03 ? 1 : 0;
+    // on the grid: wait, then (in FX mode) time the gas for a turbo start
+    if (r.phase == RacePhase::Countdown)
+        in.throttle = std::getenv("TURBO_PILOT_FX") && r.countdown <= TURBO_START_WINDOW * 0.6 ? 1 : 0;
     const Segment& s = t.find(c.dist);
     const CarStats& st = CAR_STATS[c.type];
     bool dirt = s.surface == SURF_DIRT;

@@ -585,19 +585,23 @@ void drawHud(Canvas& canvas, const Rect& vpPx, const Race& race, int idx, int fr
         }
         return ly + r;
     };
+    double belowGo = 0;   // while "GO!" shows, messages go below it
     if (race.phase == RacePhase::Countdown && race.countdown <= 3.5) {
         lights(race.countdown > 3 ? 0 : race.countdown > 2 ? 1 : race.countdown > 1 ? 2 : 3, false);
     } else if (race.phase != RacePhase::Countdown && race.time < 1.5 && !race.attract) {
         double y = lights(3, true);
         text.draw("GO!", cx, y + 6 * f, styleDisplay(30 * f, rgb(200, 255, 140), rgb(30, 200, 60)), ALIGN_CENTER);
+        belowGo = y + 44 * f;
     }
 
     // messages
     if (c.msgTimer > 0 && !c.msg.empty() && ((frame / 8) % 4 != 0 || c.msgTimer > 50)) {
         TextStyle ms = c.timedOut ? styleDisplay(30 * f, rgb(255, 140, 120), rgb(220, 0, 0))
                      : c.finished ? styleDisplay(30 * f, rgb(255, 250, 160), rgb(255, 130, 20))
+                     : c.msg == "TURBO START!" ? styleDisplay(28 * f, rgb(255, 245, 150), rgb(255, 110, 20))
+                     : c.msg == "TOO EARLY!" ? styleDisplay(24 * f, rgb(255, 170, 150), rgb(200, 30, 20))
                                   : styleDisplay(26 * f, white, rgb(140, 200, 255));
-        double my = vp.y + vp.h * 0.38;
+        double my = std::max(vp.y + vp.h * 0.38, belowGo);
         text.draw(c.msg, cx, my, ms, ALIGN_CENTER);
         if (c.msg == "CHECKPOINT" || c.msg.rfind("LAP", 0) == 0 || c.msg == "FINAL LAP")
             text.draw("EXTENDED TIME +" + std::to_string(int(c.lastBonus)), cx, my + 34 * f, styleUI(12 * f, yellow), ALIGN_CENTER);
@@ -969,7 +973,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         double bw = CAR_WORLD_W * sc * focal, bh = bw * 0.45;
         // dust / tyre smoke (soft alpha puffs drifting up and back)
         bool dust = (car.offroad || (car.onDirt && !car.airborne)) && car.speed > 400;
-        bool smoke = car.skid > 0.3 && car.speed > 2000 * SPEED_SCALE;
+        bool smoke = car.skid > 0.3 && (car.speed > 2000 * SPEED_SCALE || car.startBog > 0);   // wheelspin on the grid too
         const bool drift = car.drifting && !car.airborne && !dust;
         if (drift)                                          // drifting: a shower of sparks instead of smoke
             drawDriftSparks(cv, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101, car.driftVis, 0);

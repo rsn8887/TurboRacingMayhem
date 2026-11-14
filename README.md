@@ -21,6 +21,8 @@ A pseudo-3D arcade racer in the style of Outrun and Lotus Esprit Turbo Challenge
 
 **Nitro:** once the bar (bottom left) is full, hold the nitro button for a burst of power and a higher top speed until the bar is empty or you let go. It can only be fired again when the bar is full; it refills slowly on its own and much faster while you drift. The CPU drivers use nitro and drift too.
 
+**Turbo start:** hit the gas just before the lights turn green (within the last third of a second) and the car leaps off the line with a short nitro push. Hold the gas down any earlier and the wheels spin. The CPU drivers sometimes get a turbo start too, more often on harder difficulties.
+
 F11 or Alt+Enter toggles fullscreen.
 
 ## Building

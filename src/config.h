@@ -4,7 +4,7 @@
 
 #define GAME_TITLE   "Turbo Racing Mayhem"
 #ifndef GAME_VERSION
-#define GAME_VERSION "1.3.0"     // set by CMake from project(... VERSION)
+#define GAME_VERSION "1.4.0"     // set by CMake from project(... VERSION)
 #endif
 
 // Internal framebuffer (16:9, scales 2x to 720p and 3x to 1080p)
@@ -74,6 +74,12 @@ constexpr double NITRO_ACCEL     = 0.13;  // extra acceleration (fraction of MAX
 constexpr double NITRO_TOP       = 1.15;  // the rev limiter lets you go this far past the gear's top speed
 constexpr double NITRO_TIME      = 3.5;   // a full bar lasts this long (s)
 constexpr double NITRO_RECHARGE  = 28.0;  // an empty bar refills in this long without drifting (s)
+// turbo start: put the gas down in the last moment before the lights turn green
+constexpr double TURBO_START_WINDOW = 0.35;  // the gas must go down at most this long before green (s)
+constexpr double TURBO_START_SPEED  = 0.30;  // the car leaps off the line at this speed (x MAX_SPEED)
+constexpr double TURBO_START_TIME   = 1.2;   // then it gets a nitro-strength push for this long (s)
+constexpr double START_BOG_TIME     = 0.8;   // gas down too early: the wheels spin this long, with little drive (s)
+constexpr double START_BOG_POWER    = 0.3;   // share of the acceleration left while they spin
 // CPU drivers use the same nitro bar and drift (how often depends on the difficulty, see race.cpp)
 constexpr double AI_NITRO_WAIT   = 9.0;   // average wait (s, Medium) with a full bar before firing on a clear stretch
 constexpr double AI_DRIFT_MIN    = 2.0;   // a CPU car only drifts through bends at least this sharp

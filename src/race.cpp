@@ -125,11 +125,12 @@ double Race::delta(double a, double b) const {
 // How the difficulty changes the CPU drivers (medium = as they always were): their pace on the straights,
 // the speed they carry into bends, how hard they accelerate out of them, and how often they make mistakes.
 // nitro: how eagerly a CPU driver fires a full bar (x); drift: chance to drift through a sharp bend
-struct Difficulty { double pace, corner, accel, mistakes, nitro, drift; };
+// turbo: chance that a CPU driver gets a turbo start
+struct Difficulty { double pace, corner, accel, mistakes, nitro, drift, turbo; };
 constexpr Difficulty DIFFICULTY[3] = {
-    {0.90, 0.92, 0.85, 1.8, 0.35, 0.10},   // easy
-    {1.00, 1.00, 1.00, 1.0, 1.00, 0.22},   // medium
-    {1.05, 1.06, 1.15, 0.5, 1.70, 0.35},   // hard
+    {0.90, 0.92, 0.85, 1.8, 0.35, 0.10, 0.10},   // easy
+    {1.00, 1.00, 1.00, 1.0, 1.00, 0.22, 0.25},   // medium
+    {1.05, 1.06, 1.15, 0.5, 1.70, 0.35, 0.45},   // hard
 };
 
 void Race::start(int stage, const std::vector<Driver>& drivers, const Options& opt, bool attractMode) {
@@ -221,12 +222,40 @@ void Race::update(double dt, const PlayerInput in[2]) {
         countdown -= dt;
         for (int t = 3; t >= 1; --t)
             if (before > t && countdown <= t) audio.play(SFX_BEEP_LOW);
-        if (countdown <= 0) { audio.play(SFX_BEEP_HIGH); phase = RacePhase::Racing; }
-        for (auto& c : cars)               // rev the engine on the grid
+        for (auto& c : cars)               // rev the engine on the grid; note when the gas goes down
             if (c.player >= 0) {
                 c.throttle = in[c.player].throttle;
                 c.rpm += ((0.15 + c.throttle * 0.85) - c.rpm) * std::min(1.0, dt * 6);
+                if (c.throttle <= 0.5) c.gasDownAt = -1;
+                else if (c.gasDownAt < 0) c.gasDownAt = std::max(0.0, countdown);
             }
+        if (countdown <= 0) {
+            audio.play(SFX_BEEP_HIGH);
+            phase = RacePhase::Racing;
+            // turbo start: the gas went down in the last moment before green -> the car leaps off the line with
+            // a short nitro-strength push. Held down any earlier -> the wheels spin for a moment.
+            bool heard = false;
+            for (auto& c : cars) {
+                bool turbo = false;
+                if (c.player >= 0) {
+                    if (c.gasDownAt >= 0 && c.gasDownAt <= TURBO_START_WINDOW) turbo = true;
+                    else if (c.gasDownAt > TURBO_START_WINDOW) {
+                        c.startBog = START_BOG_TIME;
+                        c.msg = "TOO EARLY!"; c.msgTimer = 1.3;
+                    }
+                } else if (!attract) {
+                    turbo = rnd(0, 1) < DIFFICULTY[difficulty_].turbo * (0.6 + 0.4 * c.skill);
+                }
+                if (turbo) {
+                    c.speed = std::max(c.speed, TURBO_START_SPEED * MAX_SPEED);
+                    c.turboStart = TURBO_START_TIME;
+                    if (c.player >= 0) {
+                        c.msg = "TURBO START!"; c.msgTimer = 1.5;
+                        if (!heard) { audio.play(SFX_NITRO); heard = true; }
+                    }
+                }
+            }
+        }
         return;
     }
     time += dt;
@@ -283,6 +312,7 @@ void Race::updateHuman(Car& c, const PlayerInput& inRaw, double dt) {
         c.offroad = false;
         c.drifting = false;
         c.boosting = false;
+        c.turboStart = c.startBog = 0;
         c.driftVis += (0 - c.driftVis) * std::min(1.0, dt * 6);
         c.boostVis += (0 - c.boostVis) * std::min(1.0, dt * 4);
         c.rpm += (0.15 - c.rpm) * dt * 3;
@@ -336,7 +366,11 @@ void Race::updateHuman(Car& c, const PlayerInput& inRaw, double dt) {
     if (boost) c.nitro = std::max(0.0, c.nitro - dt / NITRO_TIME);
     else c.nitro = std::min(1.0, c.nitro + dt / NITRO_RECHARGE);
     if (c.drifting) c.nitro = std::min(1.0, c.nitro + dt * DRIFT_NITRO);
-    c.boostVis += ((boost ? 1.0 : 0.0) - c.boostVis) * std::min(1.0, dt * 4);
+    // turbo start push (braking cancels it), or wheelspin after a too-early start
+    if (c.turboStart > 0) c.turboStart = in.brake > 0.3 ? 0 : c.turboStart - dt;
+    if (c.startBog > 0) c.startBog -= dt;
+    const bool push = boost || c.turboStart > 0;
+    c.boostVis += ((push ? 1.0 : 0.0) - c.boostVis) * std::min(1.0, dt * 4);
 
     // steering + centrifugal force (as in Jake Gordon's / Outrun style pseudo 3D); little grip in the air,
     // less grip and more sliding on dirt
@@ -370,10 +404,11 @@ void Race::updateHuman(Car& c, const PlayerInput& inRaw, double dt) {
         // and the rev limiter cuts in at the top of each gear
         double power = in.throttle;
         if (man) power *= std::clamp(0.35 + rpm * 0.9, 0.35, 1.0);
-        const double limiter = c.boosting ? NITRO_TOP : 1.0;      // nitrous pushes past the rev limiter
+        const double limiter = push ? NITRO_TOP : 1.0;      // nitrous pushes past the rev limiter
         if (rpm >= limiter) power = 0;
         double a = carAccel(st, sp, power, dirt, c.offroad, track.groundSlope(c.dist));
-        if (c.boosting && rpm < limiter) a += NITRO_ACCEL;
+        if (c.startBog > 0 && a > 0) a *= START_BOG_POWER;   // spinning wheels: the grip is gone
+        if (push && rpm < limiter) a += NITRO_ACCEL;
         if (c.drifting) a -= DRIFT_SCRUB;
         if (in.throttle > 0.05 && rpm >= 1.0) a = std::max(a, -0.01);   // sitting on the limiter, not braking
         a -= BRAKE_DECEL * in.brake;
@@ -383,13 +418,14 @@ void Race::updateHuman(Car& c, const PlayerInput& inRaw, double dt) {
     c.speed = std::clamp(c.speed, 0.0, MAX_SPEED * OVERSPEED);
     c.x = std::clamp(c.x, -w - 1.6, w + 1.6);
 
-    double targetRpm = std::max(0.15, std::min(c.boosting ? 1.18 : 1.08, c.speed / (gearTop(c.gear) * st.top)));
+    double targetRpm = std::max(0.15, std::min(push || c.startBog > 0 ? 1.18 : 1.08, c.speed / (gearTop(c.gear) * st.top)));
     if (c.speed < 200) targetRpm = std::max(targetRpm, 0.15 + in.throttle * 0.6);
     if (air) targetRpm = std::min(1.08, targetRpm + 0.25 * in.throttle);   // free-spinning wheels
     c.rpm += (targetRpm - c.rpm) * std::min(1.0, dt * 10);
 
     double corner = std::fabs(seg.curve) * sp * sp;
     c.skid = (!c.offroad && !air && corner > 2.0 && std::fabs(in.steer) > 0.4) ? std::min(1.0, (corner - 2.0) / 2.5 + 0.3) : 0;
+    if (c.startBog > 0 && in.throttle > 0.1) c.skid = 1.0;      // spinning wheels: smoke and screech
     if (!c.offroad && !air && in.brake > 0.5 && sp > 0.55) c.skid = std::max(c.skid, 0.6);
     if (c.drifting && !air) c.skid = 1.0;
     if (dirt) c.skid = 0;     // no tyre squeal on loose ground (the gravel rumble plays instead)
@@ -561,8 +597,10 @@ void Race::updateAI(Car& c, double dt) {
         }
     }
     if (c.drifting) c.nitro = std::min(1.0, c.nitro + dt * DRIFT_NITRO);
-    c.boostVis += ((c.boosting ? 1.0 : 0.0) - c.boostVis) * std::min(1.0, dt * 4);
-    if (c.boosting) target *= NITRO_TOP;
+    if (c.turboStart > 0) c.turboStart -= dt;
+    const bool aiPush = c.boosting || c.turboStart > 0;
+    c.boostVis += ((aiPush ? 1.0 : 0.0) - c.boostVis) * std::min(1.0, dt * 4);
+    if (aiPush) target *= NITRO_TOP;
 
     // what the wheel would show: lane changes plus steering into the bend (as much as a driver needs to hold
     // the line against the centrifugal push at this speed), so cars in a bend are seen turned into it
@@ -573,7 +611,7 @@ void Race::updateAI(Car& c, double dt) {
     double gslope = c.airborne ? 0 : track.groundSlope(c.dist);
     bool dirtNow = track.find(c.dist).surface == SURF_DIRT;
     if (c.airborne) c.speed -= c.speed * 0.01 * dt;
-    else if (c.speed < target) c.speed += (carAccel(st, sp, 1.0, dirtNow, false, gslope) * c.accelK + (c.boosting ? NITRO_ACCEL : 0)) * MAX_SPEED * dt;
+    else if (c.speed < target) c.speed += (carAccel(st, sp, 1.0, dirtNow, false, gslope) * c.accelK + (aiPush ? NITRO_ACCEL : 0)) * MAX_SPEED * dt;
     else c.speed = std::max(target, c.speed + (carAccel(st, sp, 0, dirtNow, false, gslope) - BRAKE_DECEL * 0.5) * MAX_SPEED * dt);
     c.braking = c.speed > target * 1.04 && slope > -0.05;
     c.speed = std::clamp(c.speed, 0.0, MAX_SPEED * OVERSPEED);

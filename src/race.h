@@ -58,6 +58,9 @@ struct Car {
     // nitrous: bar 0..1, boosting while the button is held; boostVis is the smoothed effect (camera, flames)
     double nitro = 1.0, boostVis = 0;
     bool boosting = false;
+    double gasDownAt = -1;       // countdown time when the gas went down (and is still held), -1 = not held
+    double turboStart = 0;       // > 0: turbo start push still running (s)
+    double startBog = 0;         // > 0: wheelspin after a too-early start (s)
     bool onDirt = false;
     double lastBonus = 0;
     std::string msg; double msgTimer = 0; double msgFlash = 0;
