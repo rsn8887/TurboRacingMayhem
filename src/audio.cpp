@@ -5,7 +5,7 @@
 
 Audio audio;
 
-static const double SHOT_LEN[] = {0.18, 0.45, 1.0, 0.18, 0.36, 0.04, 0.12, 1.2, 0.3, 1.1, 0.4};
+static const double SHOT_LEN[] = {0.18, 0.45, 1.0, 0.18, 0.36, 0.04, 0.12, 1.2, 0.3, 1.1, 0.4, 0.6};
 
 float Audio::rnd() {
     noise_ ^= noise_ << 13; noise_ ^= noise_ >> 17; noise_ ^= noise_ << 5;
@@ -180,6 +180,14 @@ void Audio::mix(float* out, int n) {
                 sh.lp2 += (sh.lp - sh.lp2) * 0.04;
                 double att = std::min(1.0, t / 0.05) * env * env;
                 v = (sh.lp - sh.lp2) * 1.6 * att + std::sin(tau * (60 + t * 90) * t) * 0.35 * att;
+                break;
+            }
+            case SFX_SPLASH: {       // tyres through water: a fat swoosh of spray with gurgling bubbles
+                double nz = rnd();
+                sh.lp += (nz - sh.lp) * (0.08 + 0.25 * env);                   // brighter at the start
+                double bub = std::sin(tau * (500 + 250 * rnd() * env) * t) * (rnd() > 0.97 ? 1 : 0);
+                sh.lp2 += (bub - sh.lp2) * 0.3;
+                v = sh.lp * 2.2 * env * std::min(1.0, t * 40) + sh.lp2 * 0.25 * env;
                 break;
             }
             case SFX_TUMBLEWEED: {   // dry twigs snapping: a soft thump, a burst of crackles and a papery rustle

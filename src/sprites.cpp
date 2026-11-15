@@ -29,4 +29,5 @@ const char* const SPRITE_NAMES[SPR_COUNT] = {
     "dead_tree", "windpump", "diner", "beach_hut", "beach_hut2", "lifeguard",
     "building3", "chalet", "cabin", "motel_sign", "dome", "favela2", "confetti_cannon",
     "haussmann2", "morris", "fachwerk2", "fachwerk3", "church", "villa2", "villa3", "vines",
+    "bridge", "bridge_pillar", "autumn_tree1", "autumn_tree2", "oak", "puddle", "rain_lamp", "rain_building1", "rain_building2",
 };

@@ -794,6 +794,7 @@ int main(int argc, char** argv) {
                 for (int j : t.jumps_) std::printf("  jump crest %d\n", j);
                 for (int j : t.narrows_) std::printf("  narrows at %d\n", j);
                 for (int j : t.tunnels_) std::printf("  tunnel at %d\n", j);
+                for (int j : t.bridges_) std::printf("  bridge at %d\n", j);
                 for (int j : t.dirts_) std::printf("  dirt at %d\n", j);
             }
             if (warp >= 0) {   // debug: start the human car(s) at a segment, already at speed

@@ -33,8 +33,9 @@ namespace {
 const char* const CAR_FILE[CAR_TYPES] = {"sport", "coupe", "supercar", "suv", "pickup", "sedan"};
 const char* const EFFECT_NAMES[] = {"dust", "smoke", "spark", "lamp_glow", "light_red", "light_green", "light_off", "flame",
                                     "tumbleweed0", "tumbleweed1", "tumbleweed2", "tumbleweed3", "tumbleweed4", "tumbleweed5",
-                                    "tumbleweed6", "tumbleweed7"};
-constexpr int NUM_EFFECTS = 16;
+                                    "tumbleweed6", "tumbleweed7", "leaf_a", "leaf_b", "bridge_night", "bridge_pillar_night",
+                                    "rain_lights1", "rain_lights2"};
+constexpr int NUM_EFFECTS = 22;
 constexpr int PAD = 1;     // gap between pictures in an atlas: exactly the 1-pixel magenta line between them
 // every picture in an atlas is framed by a 1-pixel magenta rectangle just outside its area, to show where it
 // ends (neighbouring pictures share the line between them); this exact colour is never used inside a picture
@@ -237,6 +238,8 @@ const std::vector<Group>& groups() {
                     SPR_CHALET, SPR_CABIN, SPR_MOTEL_SIGN, SPR_DOME}},
         {"flair2", {SPR_FAVELA2, SPR_CONFETTI_CANNON, SPR_HAUSSMANN2, SPR_MORRIS, SPR_FACHWERK2, SPR_FACHWERK3, SPR_CHURCH,
                     SPR_VILLA2, SPR_VILLA3, SPR_VINES}},
+        {"stage12", {SPR_BRIDGE, SPR_BRIDGE_PILLAR, SPR_AUTUMN_TREE1, SPR_AUTUMN_TREE2, SPR_OAK}},
+        {"stage13", {SPR_PUDDLE, SPR_RAIN_LAMP, SPR_RAIN_BUILDING1, SPR_RAIN_BUILDING2}},
         {"italy", {SPR_CYPRESS, SPR_VILLA, SPR_OLIVE}},
     };
     return g;
@@ -244,7 +247,8 @@ const std::vector<Group>& groups() {
 Bitmap* effect(Graphics& g, int i) {
     Bitmap* e[] = {&g.dust, &g.smoke, &g.spark, &g.lampGlow, &g.lightRed, &g.lightGreen, &g.lightOff, &g.flame,
                    &g.tumbleweed[0], &g.tumbleweed[1], &g.tumbleweed[2], &g.tumbleweed[3], &g.tumbleweed[4],
-                   &g.tumbleweed[5], &g.tumbleweed[6], &g.tumbleweed[7]};
+                   &g.tumbleweed[5], &g.tumbleweed[6], &g.tumbleweed[7], &g.leaf[0], &g.leaf[1], &g.bridgeNight,
+                   &g.bridgePillarNight, &g.rainLights[0], &g.rainLights[1]};
     return e[i];
 }
 } // namespace

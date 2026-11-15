@@ -92,7 +92,7 @@ void drawBackground(Canvas& cv, const Rect& vp, const Theme& th, const Car& car,
             double t = double(y - vp.y) / std::max(1, hy - vp.y);
             c = lerpColor(th.skyTop, th.skyBottom, std::pow(t, 1.35));
             double g = std::clamp((t - 0.72) / 0.28, 0.0, 1.0);
-            if (g > 0) c = lerpColor(c, lerpColor(th.skyBottom, th.night ? rgb(255, 140, 210) : rgb(255, 255, 255), 0.3), 0.55 * g * g);
+            if (g > 0) c = lerpColor(c, lerpColor(th.skyBottom, th.horizonGlow ? th.horizonGlow : th.night ? rgb(255, 140, 210) : rgb(255, 255, 255), 0.3), 0.55 * g * g);
         }
         else c = th.fogDensity > 0 ? lerpColor(th.horizonGround, th.fogColor, 0.6) : th.horizonGround;
         cv.span(vp.x, vp.x + vp.w, y, c);
@@ -181,7 +181,7 @@ void drawRoadRow(Canvas& cv, const Rect& vp, const Theme& th, int y, double cx, 
     auto LD = [lf](Color l, Color d) { return lerpColor(d, l, lf); };
     const double detail = std::clamp(1 - span / 120, 0.0, 1.0);    // fine detail fades out with distance
     double fog = fogAt(th, z);
-    double dark = tunnel ? tunnelDark(z) : 0;
+    double dark = tunnel ? tunnelDark(z) : seg.shadow ? 0.42 : 0;     // in the shadow of a bridge
     auto F = [&](Color c) {
         if (fog > 0) c = lerpColor(c, th.fogColor, fog);
         return dark > 0 ? lerpColor(c, TUNNEL_BLACK, dark) : c;
@@ -571,6 +571,48 @@ void drawWallSparks(Canvas& cv, const std::vector<std::array<double, 2>>& tyres,
             dot(tail[0] + dx * f, tail[1] + dy * f, th, c, a * (0.25 + 0.75 * f));
         }
         dot(head[0], head[1], th * 1.8, rgb(255, 250, 220), a * 0.9);
+    }
+}
+
+// Puddle splash: water thrown up from the rear tyres in two wide fans - a mist of spray at the tyres and drops
+// (round, not streaks) that fly up and out and fall back, pale and translucent, some catching the street light.
+void drawSplash(Canvas& cv, const std::vector<std::array<double, 2>>& tyres, double cx, double groundY, double bw,
+                double clip, double t, unsigned seed, double strength, double dim) {
+    if (bw < 3 || strength < 0.05) return;
+    std::array<double, 2> fallback[2] = {{cx - bw * 0.38, groundY}, {cx + bw * 0.38, groundY}};
+    const std::array<double, 2>* pts = tyres.size() >= 2 ? tyres.data() : fallback;
+    std::array<double, 2> L = pts[0], R = pts[1];
+    if (L[0] > R[0]) std::swap(L, R);
+    const double vis = strength * (1 - dim);
+    // the spray: soft white fans rising from the tyres, leaning outwards
+    for (int k = 0; k < 2; ++k) {
+        const auto& o = k ? R : L;
+        double side = k ? 1 : -1;
+        for (int j = 0; j < 3; ++j) {
+            double fl = 0.8 + 0.2 * std::sin(t * 23 + j * 2 + k);
+            double w = bw * (0.32 + 0.14 * j) * fl, h = bw * (0.3 + 0.12 * j) * fl;
+            double x = o[0] + side * bw * (0.04 + 0.1 * j) - w / 2, y = o[1] - h * 0.9 - bw * 0.04 * j;
+            cv.blitScaled(gfx.smoke, x, y, w, h, false, clip, 0.45, rgb(214, 224, 236), (0.5 - 0.12 * j) * vis);
+        }
+    }
+    // drops
+    const int N = bw > 60 ? 80 : bw > 20 ? 34 : 10;
+    for (int i = 0; i < N; ++i) {
+        const double life = 0.32 + 0.2 * frand(unsigned(i) * 71 + seed);
+        double ph = t / life + double(i) / N;
+        double cyc = std::floor(ph), age = ph - cyc;
+        unsigned sd = unsigned(cyc) * 113 + unsigned(i) * 29 + seed;
+        double r1 = frand(sd), r2 = frand(sd + 1), r3 = frand(sd + 2);
+        const std::array<double, 2>& o = (i & 1) ? R : L;
+        double side = (i & 1) ? 1 : -1;
+        double vx = side * (0.2 + 1.6 * r1) * bw, vy = -(1.0 + 1.8 * r2) * bw;
+        const double g = 7.0 * bw, ts = age * life;
+        double x = o[0] + vx * ts, y = o[1] - bw * 0.04 + vy * ts + 0.5 * g * ts * ts;
+        if (y > clip) continue;
+        double sz = std::max(1.0, bw * (0.012 + 0.016 * r3));
+        Color c = r3 < 0.3 ? rgb(255, 214, 160) : rgb(200, 214, 232);   // some catch the lamp light
+        double a = vis * 0.75 * (age > 0.6 ? (1 - age) / 0.4 : 1.0);
+        cv.rectBlend(int(x - sz / 2), int(y - sz / 2), int(std::ceil(sz)), int(std::ceil(sz)), c, a);
     }
 }
 
@@ -1130,15 +1172,27 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             double sc = depth / p.z1;
             double fog = fogAt(th, p.z1);
             for (const SpriteInst& si : seg.sprites) {
-                const Bitmap& bmp = gfx.sprite[si.type];
+                const Bitmap& bmp = th.rain && si.type == SPR_BRIDGE ? gfx.bridgeNight
+                                  : th.rain && si.type == SPR_BRIDGE_PILLAR ? gfx.bridgePillarNight : gfx.sprite[si.type];
                 double dh = SPRITE_INFO[si.type].worldH * sc * focal;
                 double dw = dh * bmp.w / bmp.h;
-                if (si.type == SPR_GANTRY_START || si.type == SPR_GANTRY_CHECK) dw *= seg.w1;   // spans the road
+                if (si.type == SPR_GANTRY_START || si.type == SPR_GANTRY_CHECK || si.type == SPR_BRIDGE) dw *= seg.w1;   // spans the road
                 double sx = p.x1 + sc * si.offset * ROAD_WIDTH * focal;
-                if (sx + dw / 2 < vp.x || sx - dw / 2 > vp.x + vp.w) continue;
+                if (si.type != SPR_BRIDGE && (sx + dw / 2 < vp.x || sx - dw / 2 > vp.x + vp.w)) continue;
                 bool flip = SPRITE_INFO[si.type].mirrorRight && si.offset > 0;
                 if (!lamps.empty()) flushLampsBehind({sx - dw / 2, p.y1 - dh, sx + dw / 2, p.y1});
-                cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, fog, th.fogColor);
+                // street lamps keep shining in the dark distance (their light, not the post, cuts through the murk)
+                double f = si.type == SPR_RAIN_LAMP ? fog * 0.2 : th.rain && si.type == SPR_BRIDGE ? fog * 0.75 : fog;
+                const bool lights = si.type == SPR_RAIN_BUILDING1 || si.type == SPR_RAIN_BUILDING2;
+                if (!(th.rain && f > 0.86))                 // (lost in the dark: not worth drawing)
+                    cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, f, th.fogColor);
+                if (lights)                                 // lit windows shine at full brightness, near or far
+                    cv.blitScaled(gfx.rainLights[si.type == SPR_RAIN_BUILDING2], sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip,
+                                  fog * 0.15, th.fogColor);
+                if (si.type == SPR_BRIDGE && dw > 4)        // the deck runs on out to both screen edges
+                    for (int sd : {-1, 1})
+                        for (double tx = sx - dw / 2 + sd * dw; tx + dw > vp.x && tx < vp.x + vp.w; tx += sd * dw)
+                            cv.blitScaled(bmp, tx, p.y1 - dh, dw, dh, false, p.clip, f, th.fogColor);
             }
         }
         while (wi < weedRefs.size() && weedRefs[wi].n > n) ++wi;
@@ -1187,6 +1241,8 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             if (!lamps.empty()) flushLampsBehind({carX - w / 2, ry - lift - w * CAR_BMP_H / CAR_BMP_W, carX + w / 2, ry});
             drawCarSprite(cv, c, carX, ry - lift, ry, w, p.clip, fogC, fogCol, std::clamp(1 - c.air / 2400, 0.35, 1.0), viewAngle,
                           viewElev, unsigned(opt.frame));
+            if (c.splash > 0 && bodyW > 4)                     // driving through a puddle
+                drawSplash(cv, g_tyrePts, carX, ry, bodyW, p.clip, race.time, unsigned(r.idx) * 101, std::min(1.0, c.splash / 0.25), fogC * 0.5);
             if (c.drifting && !c.airborne && bodyW > 4)       // CPU drivers drift too
                 drawDriftSparks(cv, g_tyrePts, carX, ry, bodyW, p.clip, race.time, unsigned(r.idx) * 101, c.driftVis,
                                 c.inTunnel ? 0 : fogC);   // sparks glow even in the dark of a tunnel
@@ -1224,6 +1280,8 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         bool dust = (car.offroad || (car.onDirt && !car.airborne)) && car.speed > 400;
         const bool wallSparks = car.wallScrape > 0 && car.speed > 1500 * SPEED_SCALE;    // grinding along a tunnel wall
         bool smoke = !wallSparks && car.skid > 0.3 && (car.speed > 2000 * SPEED_SCALE || car.startBog > 0);   // wheelspin on the grid too
+        if (car.splash > 0)
+            drawSplash(cv, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101, std::min(1.0, car.splash / 0.25), 0);
         const bool drift = car.drifting && !car.airborne && !dust;
         if (drift)                                          // drifting: a shower of sparks instead of smoke
             drawDriftSparks(cv, g_tyrePts, cx, by, bw, 1e9, race.time, unsigned(carIndex) * 101, car.driftVis, 0);
@@ -1244,7 +1302,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         }
     }
 
-    // ---- ambient flair, in front of everything: confetti (Rio)
+    // ---- ambient flair, in front of everything: confetti (Rio), gusts of leaves (autumn forest), rain
     {
         // camera-space particles: screen position of a point X (world units across), Y (height above the road
         // at the camera), Z (ahead of the camera)
@@ -1290,6 +1348,74 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 if (spin < 0) c = shade(c, 0.7);         // the back of the paper is darker
                 double fade = std::min(1.0, (4.5 - age) / 1.0) * std::min(1.0, (Zw - 380) / 500);
                 cv.rectBlend(int(sx - w / 2), int(sy - h / 2), int(std::ceil(w)), int(std::ceil(h)), c, 0.95 * fade);
+            }
+        }
+        // autumn leaves: a gust shakes them from the old oaks as the car comes by - they swirl out across the road
+        // and towards us, tumbling and fluttering, then sink slowly to the ground
+        if (tr.stage == 11 && age >= 0 && age < 5.0) {
+            double zRelBase = car.confettiZ - (car.dist - camBack);
+            for (int i = 0; i < 200; ++i) {
+                double r0 = frand(i * 13 + 1), r1 = frand(i * 13 + 2), r2 = frand(i * 13 + 3), r3 = frand(i * 13 + 4), r4 = frand(i * 13 + 5);
+                double side = (i & 1) ? 1 : -1;
+                double a = age - r4 * 0.6;               // the gust keeps shaking leaves loose for a moment
+                if (a < 0) continue;
+                double k = 1.1, e = (1 - std::exp(-k * a)) / k;
+                double vx = -side * (900 + 3800 * r0), vz = -(1500 + 6500 * r1), vy = 300 + 900 * r2;
+                double X = side * (1.75 * ROAD_WIDTH + 600 * (r2 - 0.5)) + vx * e + std::sin(a * (1.6 + r3 * 2) + r0 * 6) * 380;
+                double Zw = zRelBase + vz * e + std::cos(a * (1.3 + r2) + r1 * 6) * 250;
+                double Y = 2600 + 1400 * r3 + vy * e - 520 * a;
+                if (Y < 0 || Zw < 380) continue;
+                int n = int(Zw / SEG_LEN);
+                if (n < 1 || n >= DRAW_DIST - 1) continue;
+                const Proj& pp = proj[n];
+                double pct = Zw / SEG_LEN - n;
+                double roadX = (pp.x1 + (pp.x2 - pp.x1) * pct - cx) / kz * Zw;
+                double sx, sy;
+                scr(X + roadX, Y + (tr.heightAt(car.dist - camBack + Zw) - groundAtCar), Zw, sx, sy);
+                if (sy > pp.clip) continue;
+                double sz = std::min(150 / Zw * kz, 26.0 * s);
+                double flip = std::cos(a * (3 + 5 * r3) + r0 * 6.28);            // tumbling: it turns edge-on
+                double wv = sz * std::max(0.2, std::fabs(flip));
+                double fade = std::min(1.0, (5.0 - age) / 1.2) * std::min(1.0, (Zw - 380) / 500);
+                cv.blitScaled(gfx.leaf[r2 < 0.55 ? 0 : 1], sx - wv / 2, sy - sz / 2, wv, sz, flip < 0, 1e9, fogAt(th, Zw) * 0.6,
+                              th.fogColor, fade);
+            }
+        }
+        // rain: long, slanted streaks falling past the camera, and drops bursting on the road ahead
+        if (th.rain && !car.inTunnel) {
+            const double T = race.time + carIndex * 3.1;
+            const int NR = 220;
+            for (int i = 0; i < NR; ++i) {
+                double r0 = frand(i * 7 + 101), r1 = frand(i * 7 + 102), r2 = frand(i * 7 + 103);
+                double sp = 1.4 + 0.9 * r1;                              // screen heights per second
+                double ph = std::fmod(T * sp + r0, 1.0);
+                double len = (14 + 22 * r2) * s, x0 = vp.x + std::fmod(r2 * 1.7 + r0 * 0.3 + T * 0.02, 1.0) * (vp.w + 80 * s) - 40 * s;
+                double y0 = vp.y - len + ph * (vp.h + len);
+                double slant = 0.18 + 0.04 * std::sin(T * 0.5);         // blown a little by the wind
+                Color c = r1 < 0.2 ? rgb(230, 200, 160) : rgb(176, 186, 204);   // some catch the street light
+                double a = 0.18 + 0.22 * r2;
+                if (y0 + len < cv.clip.y || y0 > cv.clip.y + cv.clip.h) continue;   // not in this strip
+                // four short pieces, stepping sideways: a slanted streak, brighter at its lower end
+                const int pieces = 4;
+                double pl = len / pieces;
+                for (int k = 0; k < pieces; ++k) {
+                    double f = (k + 0.5) / pieces;
+                    cv.rectBlend(int(x0 - slant * len * f), int(y0 + pl * k), std::max(1, int(s * 0.8)), int(std::ceil(pl)), c,
+                                 a * (0.4 + 0.6 * f));
+                }
+            }
+            // drops bursting on the road: little splashes below the horizon, nearer ones bigger
+            for (int i = 0; i < 60; ++i) {
+                double r0 = frand(i * 5 + 501), r1 = frand(i * 5 + 502);
+                double life = 0.25, ph = std::fmod(T / life + r0, 1.0);
+                unsigned cyc = unsigned(std::floor(T / life + r0));
+                double u = frand(cyc * 17 + i * 3 + 7), v = frand(cyc * 31 + i * 5 + 11);
+                double yy = horizonY + (vp.y + vp.h - horizonY) * (0.08 + 0.92 * v * v);
+                if (yy >= vp.y + vp.h) continue;
+                double xx = vp.x + u * vp.w, sz = (1 + 5 * v * v) * s * (0.5 + ph);
+                double a = 0.35 * (1 - ph) * (0.4 + r1 * 0.6);
+                cv.rectBlend(int(xx - sz), int(yy), std::max(1, int(2 * sz)), std::max(1, int(s * 0.8)), rgb(190, 200, 215), a);
+                cv.rectBlend(int(xx - 1), int(yy - sz * 1.2), std::max(1, int(s)), std::max(1, int(sz)), rgb(190, 200, 215), a * 0.7);
             }
         }
     }

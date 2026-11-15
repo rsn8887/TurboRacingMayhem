@@ -80,6 +80,8 @@ constexpr double TURBO_START_SPEED  = 0.30;  // the car leaps off the line at th
 constexpr double TURBO_START_TIME   = 1.2;   // then it gets a nitro-strength push for this long (s)
 constexpr double START_BOG_TIME     = 0.8;   // gas down too early: the wheels spin this long, with little drive (s)
 constexpr double START_BOG_POWER    = 0.3;   // share of the acceleration left while they spin
+// puddles (rainy night city): driving through one costs speed and throws up a splash
+constexpr double PUDDLE_DRAG = 0.25;     // speed kept per second while in the water
 // CPU drivers use the same nitro bar and drift (how often depends on the difficulty, see race.cpp)
 constexpr double AI_NITRO_WAIT   = 9.0;   // average wait (s, Medium) with a full bar before firing on a clear stretch
 constexpr double AI_DRIFT_MIN    = 2.0;   // a CPU car only drifts through bends at least this sharp

@@ -23,6 +23,10 @@ enum SpriteType {
     SPR_HAUSSMANN2, SPR_MORRIS,                                       // Paris
     SPR_FACHWERK2, SPR_FACHWERK3, SPR_CHURCH,                         // Germany
     SPR_VILLA2, SPR_VILLA3, SPR_VINES,                                // Tuscany
+    // 1.4: stages 12-13 (appended again)
+    SPR_BRIDGE, SPR_BRIDGE_PILLAR,                                    // road bridges the cars drive under
+    SPR_AUTUMN_TREE1, SPR_AUTUMN_TREE2, SPR_OAK,                      // autumn forest
+    SPR_PUDDLE, SPR_RAIN_LAMP, SPR_RAIN_BUILDING1, SPR_RAIN_BUILDING2, // rainy night city
     SPR_COUNT
 };
 
@@ -53,6 +57,7 @@ struct Segment {
     double curve = 0;
     double w1 = 1, w2 = 1;    // road width factor at start / end (1 = standard 4 lanes)
     bool tunnel = false;
+    bool shadow = false;      // in the shadow of a bridge over the road
     Surface surface = SURF_ASPHALT;
     Kerb kerb = KERB_RUMBLE;
     std::vector<SpriteInst> sprites;
@@ -92,9 +97,11 @@ struct Theme {
     RoadStyle road = ROAD_ASPHALT;
     Color roadAlt = 0;                        // second tile colour (chequerboard) / stone joints (cobbles)
     Color grid = 0;                           // if set: glowing grid lines on the verge (future)
+    Color horizonGlow = 0;                    // if set: the glow along the horizon (else white by day, pink by night)
+    bool  rain = false;                       // rain, wet road with puddles
 };
 
-constexpr int NUM_STAGES = 11;
+constexpr int NUM_STAGES = 13;
 
 class Track {
 public:
@@ -140,7 +147,8 @@ private:
 public:
     std::vector<int> dirts_;
     std::vector<int> jumps_, narrows_, tunnels_;   // segment indices of features (signs, debugging)
-    std::vector<int> confetti_;                    // Brazil: pairs of confetti cannons that fire at passing players
+    std::vector<int> confetti_;                    // Brazil: confetti cannons / autumn forest: old oaks - both fire at passing players
+    std::vector<int> bridges_;                     // road bridges (stages 12-13)
     void downhillToEnd(int n);
     void layout(int stage);
     void decorate(unsigned seed);

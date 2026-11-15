@@ -1,5 +1,6 @@
 #include "track.h"
 #include <cmath>
+#include <algorithm>
 #include <random>
 
 const SpriteInfo SPRITE_INFO[SPR_COUNT] = {
@@ -62,11 +63,20 @@ const SpriteInfo SPRITE_INFO[SPR_COUNT] = {
     {3800, 0.95},  // VILLA2
     {5000, 0.95},  // VILLA3
     {1100, 0.95},  // VINES
+    {5400, 0.00},  // BRIDGE (deck: collides only through its pillars)
+    {3900, 0.85},  // BRIDGE_PILLAR
+    {3300, 0.30},  // AUTUMN_TREE1
+    {3900, 0.22},  // AUTUMN_TREE2
+    {4600, 0.28},  // OAK
+    { 130, 0.00},  // PUDDLE (not solid: slows you down and splashes)
+    {2900, 0.12, true},  // RAIN_LAMP (with its light cone)
+    {7000, 0.95},  // RAIN_BUILDING1
+    {5400, 0.95},  // RAIN_BUILDING2
 };
 
 const char* STAGE_NAMES[NUM_STAGES] = {
     "COCONUT COAST", "DESERT CANYON", "NEON NIGHT", "ALPINE PASS", "MISTY FOREST", "SUNSET BOULEVARD",
-    "HYPERION 2099", "RIO CARNIVAL", "PARIS", "AUTOBAHN", "FLORENCE"
+    "HYPERION 2099", "RIO CARNIVAL", "PARIS", "AUTOBAHN", "FLORENCE", "AUTUMN FOREST", "RAINY NIGHT"
 };
 
 namespace {
@@ -146,6 +156,21 @@ Theme makeTheme(int stage) {
         t.grassLight = rgb(90, 180, 60); t.grassDark = rgb(76, 160, 52);
         t.roadLight = rgb(110, 112, 118); t.roadDark = rgb(102, 104, 110);
         t.background = 9; break;
+    case 11: // autumn forest: golden light, red and orange woods
+        t.skyTop = rgb(90, 140, 200); t.skyBottom = rgb(250, 214, 160); t.horizonGround = rgb(150, 100, 50);
+        t.fogColor = rgb(236, 206, 166); t.fogDensity = 0.00003;
+        t.grassLight = rgb(170, 132, 62); t.grassDark = rgb(154, 116, 54);     // grass under fallen leaves
+        t.roadLight = rgb(104, 100, 98); t.roadDark = rgb(96, 92, 90);
+        t.rumbleA = rgb(220, 100, 30); t.rumbleB = rgb(245, 240, 225);
+        t.background = 11; t.sun = true; break;
+    case 12: // rainy night city: wet black road, sodium street lamps, the distance lost in the dark
+        t.skyTop = rgb(6, 8, 14); t.skyBottom = rgb(30, 32, 42); t.horizonGround = rgb(12, 13, 18);
+        t.fogColor = rgb(6, 7, 11); t.fogDensity = 0.00026;
+        t.grassLight = rgb(44, 45, 50); t.grassDark = rgb(40, 41, 46);         // wet pavement
+        t.roadLight = rgb(48, 50, 56); t.roadDark = rgb(44, 46, 52);
+        t.rumbleA = rgb(200, 200, 196); t.rumbleB = rgb(70, 72, 78); t.lane = rgb(210, 205, 180);
+        t.horizonGlow = rgb(150, 100, 60);                                      // the city's sodium glow in the clouds
+        t.background = 12; t.night = true; t.rain = true; break;
     default: // 10 Florence: Tuscan hills, cypresses, white gravel roads and the cathedral dome
         t.skyTop = rgb(60, 130, 220); t.skyBottom = rgb(250, 230, 190); t.horizonGround = rgb(170, 160, 90);
         t.grassLight = rgb(176, 184, 80); t.grassDark = rgb(160, 168, 70);
@@ -168,6 +193,8 @@ Theme makeTheme(int stage) {
     case 8: t.kerb = KERB_SOLID; t.shoulder = rgb(206, 198, 184); break;
     case 9: t.kerb = KERB_SOLID; t.shoulder = rgb(150, 150, 140); break;
     case 10: t.dirtLight = rgb(236, 226, 204); t.dirtDark = rgb(222, 210, 186); t.shoulder = rgb(210, 196, 160); break;   // strade bianche
+    case 11: t.dirtLight = rgb(150, 100, 56); t.dirtDark = rgb(134, 88, 48); t.shoulder = rgb(130, 104, 70); t.kerb = KERB_SOLID; break;
+    case 12: t.kerb = KERB_SOLID; t.shoulder = rgb(56, 57, 62); t.rail = rgb(130, 134, 140); break;
     default: break;
     }
     // tunnel looks: concrete by default, rock faces in the countryside
@@ -188,6 +215,9 @@ Theme makeTheme(int stage) {
     case 8: t.facade = rgb(200, 190, 170); t.facadeCap = rgb(110, 120, 140); t.rockFacade = false; break;
     case 9: t.facade = rgb(150, 150, 146); t.facadeCap = rgb(60, 150, 60); t.rockFacade = false; break;
     case 10: t.facade = rgb(200, 170, 120); t.facadeCap = rgb(190, 90, 50); break;
+    case 11: t.facade = rgb(130, 120, 104); t.facadeCap = rgb(200, 110, 40); break;
+    case 12: t.wallA = rgb(90, 90, 94); t.wallB = rgb(70, 70, 74); t.lamp = rgb(255, 180, 90);
+             t.facade = rgb(84, 84, 88); t.facadeCap = rgb(60, 60, 64); t.rockFacade = false; break;
     default: break;
     }
     return t;
@@ -547,6 +577,53 @@ void Track::layout(int st) {
         curve(LONG, -MED);
         straight(MEDIUM);
         break;
+    case 11:  // autumn forest: winding woodland roads, a gravel stretch and bridges overhead
+        straight(SHORT);
+        curve(MEDIUM, MED, LOW);
+        sCurves(SHORT, MED, MID);
+        straight(MEDIUM);
+        hill(MEDIUM, -MID);
+        curve(LONG, -EASY);
+        straight(MEDIUM);
+        tunnel(SHORT, MED);
+        straight(MEDIUM);
+        surface(SURF_DIRT);                  // a forest track over fallen leaves
+        sCurves(SHORT, EASY, LOW);
+        surface(SURF_ASPHALT);
+        curve(MEDIUM, HARD, -LOW);
+        straight(MEDIUM);
+        jump(0.16);
+        curve(MEDIUM, -MED, MID);
+        straight(LONG);
+        curve(MEDIUM, EASY, -MID);
+        straight(MEDIUM);
+        break;
+    case 12:  // rainy night city: long wet avenues under bridges, a tunnel and a narrow lane
+        straight(SHORT);
+        curve(SHORT, MED);
+        straight(MEDIUM);
+        kerb(KERB_SOLID);
+        width(SHORT, 1.4);                   // wide avenue
+        straight(LONG);
+        kerbDefault();
+        width(SHORT, 1.0);
+        curve(MEDIUM, -HARD);
+        straight(MEDIUM);
+        tunnel(SHORT, EASY);
+        straight(MEDIUM);
+        sCurves(SHORT, MED);
+        kerb(KERB_GUARDRAIL);
+        width(SHORT, 0.75);                  // between crash barriers by the river
+        curve(SHORT, HARD, LOW);
+        straight(MEDIUM);
+        kerbDefault();
+        width(SHORT, 1.0);
+        hill(MEDIUM, -LOW);
+        curve(MEDIUM, -MED);
+        straight(LONG);
+        curve(MEDIUM, EASY);
+        straight(MEDIUM);
+        break;
     default:  // 10 Florence: rolling hills, cypress avenues and white gravel roads
         straight(SHORT);
         hill(MEDIUM, MID);
@@ -728,6 +805,27 @@ void Track::decorate(unsigned seed) {
             if (i % 120 == 100 && !gantry && !sign) add(i, SPR_AUTOBAHN_SIGN, 1.7);
             if (i % 55 == 30) add(i, SPR_WIND_TURBINE, side() * rnd(5.0, 9.0));
             break;
+        case 11:  // autumn forest
+            if (i % 8 == 0 && !gantry && !sign) add(i, rnd2(0, 1) < 0.6 ? SPR_AUTUMN_TREE1 : SPR_AUTUMN_TREE2, side2() * rnd2(1.6, 2.1));
+            if (rnd2(0, 1) < 0.14) add(i, rnd2(0, 1) < 0.5 ? SPR_AUTUMN_TREE1 : (rnd2(0, 1) < 0.6 ? SPR_AUTUMN_TREE2 : SPR_PINE), side2() * rnd2(2.4, 8.0));
+            if (rnd2(0, 1) < 0.05) add(i, SPR_BUSH, side2() * rnd2(1.6, 4.0));
+            if (i % 110 == 55 && !gantry) add(i, SPR_CABIN, side2() * rnd2(3.0, 4.5));
+            if (i % 170 == 85 && !gantry && !sign && !isTunnel(i) && !isTunnel(i + 4)) {   // old oaks: a gust of leaves
+                add(i, SPR_OAK, -1.75);
+                add(i, SPR_OAK, 1.75);
+                confetti_.push_back(i);
+            }
+            break;
+        case 12:  // rainy night city
+            if (i % 16 == 0 && !gantry && !sign) add(i, SPR_RAIN_LAMP, (i / 16) % 2 ? 1.35 : -1.35);
+            if (i % 10 == 0) add(i, rnd2(0, 1) < 0.55 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(2.8, 4.5));
+            if (rnd2(0, 1) < 0.05) add(i, rnd2(0, 1) < 0.5 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(5.0, 8.0));
+            if (i % 23 == 11 && !gantry && rnd2(0, 1) < 0.75 && segs[i].surface == SURF_ASPHALT &&
+                std::fabs(segs[i].w1 - 1) < 0.3) {                   // a puddle in the road, three segments long
+                double off = rnd2(-0.7, 0.7);
+                for (int k = 0; k < 3; ++k) add(i + k, SPR_PUDDLE, off + rnd2(-0.04, 0.04));
+            }
+            break;
         default:  // 10 Florence
             if (i % 9 == 0 && !gantry && !sign) { add(i, SPR_CYPRESS, -1.7 - rnd(0, 0.2)); add(i, SPR_CYPRESS, 1.7 + rnd(0, 0.2)); }
             if (chance(0.11)) add(i, SPR_OLIVE, side() * rnd(2.4, 7.0));
@@ -737,13 +835,41 @@ void Track::decorate(unsigned seed) {
             break;
         }
     }
+
+    // road bridges over the road (new stages): on level, straight-ish, standard-width stretches away from
+    // gantries, tunnels and jumps. The scenery right under and beside a bridge makes way for it.
+    if (stage == 11 || stage == 12) {
+        int last = -1000;
+        for (int i = 150; i < n - 60; ++i) {
+            if (i - last < 280) continue;
+            bool ok = std::abs(i - checkpoint) > 30;
+            for (int k = i - 12; ok && k <= i + 12; ++k) {
+                const Segment& s = segs[k];
+                ok = !s.tunnel && s.surface == SURF_ASPHALT && std::fabs(s.curve) < 2.5 && std::fabs(s.w1 - 1) < 0.02 &&
+                     std::fabs(s.y2 - s.y1) < SEG_LEN * 0.06;
+            }
+            for (int j : jumps_) ok = ok && std::abs(i - j) > 80;
+            for (int t : tunnels_) ok = ok && std::abs(i - t) > 40;
+            if (!ok) continue;
+            for (int k = i - 3; k <= i + 3; ++k) {
+                auto& v = segs[k].sprites;
+                v.erase(std::remove_if(v.begin(), v.end(), [](const SpriteInst& si) { return std::fabs(si.offset) < 6.5; }), v.end());
+            }
+            segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, -1.6});
+            segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, 1.6});
+            segs[i].sprites.push_back({SPR_BRIDGE, 0});
+            for (int k = i - 1; k <= i + 2; ++k) segs[k].shadow = true;
+            bridges_.push_back(i);
+            last = i;
+        }
+    }
 }
 
 void Track::build(int st) {
     stage = st;
     theme = makeTheme(st);
     segs.clear();
-    jumps_.clear(); narrows_.clear(); tunnels_.clear(); dirts_.clear(); confetti_.clear();
+    jumps_.clear(); narrows_.clear(); tunnels_.clear(); dirts_.clear(); confetti_.clear(); bridges_.clear();
     surface_ = SURF_ASPHALT;
     kerb_ = theme.kerb;
     layout(st);

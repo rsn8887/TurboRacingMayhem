@@ -47,6 +47,7 @@ struct Car {
     double crashTimer = 0, bumpTimer = 0, shake = 0;
     double wallScrape = 0;       // > 0: scraping along a tunnel wall (sparks), on side wallSide (-1 left, 1 right)
     int wallSide = 0;
+    double splash = 0;           // > 0: throwing up water from a puddle (rainy night city)
     double confettiT = -99, confettiZ = -1e9;   // Brazil: when/where the last confetti cannons fired at this car
     double bgOffset = 0;
     // vertical motion (jumps)

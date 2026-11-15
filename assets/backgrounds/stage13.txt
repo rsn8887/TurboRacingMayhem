@@ -1,0 +1,4 @@
+# background layers of RAINY NIGHT, back to front: layer  x y w h  parallax  yOffset
+layer  1 252 2048 220  0.03 -86
+layer  1 1 2048 250  0.04 0
+layer  1 473 2048 190  0.08 0

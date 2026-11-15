@@ -2105,6 +2105,229 @@ Bitmap makeVines() {   // a block of vineyard rows: posts, green leafy rows and 
     return p.finish(rgb(30, 40, 20), 0.8);
 }
 
+// ===================================================== stages 12-13 (1.4) ====
+// Road bridges, the autumn forest and the rainy night city. Each is generated in its own seeded block.
+
+// A concrete road bridge spanning the road (in the spirit of the bridges in Jaguar XJ220): a deck with a railing.
+// It tiles seamlessly sideways - the renderer repeats it out to both screen edges. Its pillars are separate
+// sprites (they collide).
+// Layout 640 x 150; the deck's underside is at y = 50, i.e. about 3600 world units above the road.
+Bitmap makeBridge(bool night) {
+    const int w = 640, h = 150;
+    Painter p(w, h, SS, RENDER_SCALE, 2, 2);
+    Color conc = night ? rgb(110, 110, 114) : rgb(196, 192, 182);
+    // the deck repeats seamlessly sideways (the renderer tiles it out to the screen edges)
+    // the deck: fascia with a darker band and drip stains, the underside in shadow
+    p.rect(0, 14, w, 36, Paint([=](double x, double y) {
+        Color c = vgrad(14, 50, shade(conc, 1.05), shade(conc, 0.82))(x, y);
+        if (y > 22 && y < 26) c = shade(c, 0.86);
+        if (y > 30 && hashNoise(std::fmod(std::floor(x / 3), 213.0), 1) > 0.7) c = shade(c, 0.9 - 0.1 * (y - 30) / 20);   // stains
+        if (std::fmod(x, 80.0) < 1.0) c = shade(c, 0.8);                                                 // joints
+        return c;
+    }));
+    p.rect(0, 48, w, 3, shade(conc, 0.45));
+    // railing: posts and two rails, plus a lamp post every so often
+    Color rail = night ? rgb(130, 134, 140) : rgb(110, 116, 124);
+    p.rect(0, 2, w, 2, rail);
+    p.rect(0, 8, w, 2, rail);
+    for (double x = 4; x < w; x += 10) p.rect(x, 2, 1.6, 12, rail);
+    for (double x = 80; x < w; x += 160) {
+        p.rect(x, -24, 2.2, 26, rail);
+        p.rect(x - 4, -26, 10, 3, rail);
+        if (night) glow(p, x + 1, -22, 10, 6, rgb(255, 190, 110), 1.0);
+    }
+    return p.finish(0, 0);
+}
+
+Bitmap makeBridgePillar(bool night) {
+    Painter p(40, 160, SS, RENDER_SCALE, 2, 2);
+    Color conc = night ? rgb(104, 104, 108) : rgb(188, 184, 174);
+    p.rect(4, 0, 32, 160, cylX(4, 36, conc, 0.4, 0.15, 6));
+    for (double y = 20; y < 160; y += 26) p.rect(4, y, 32, 0.8, shade(conc, 0.85));
+    p.rect(0, 150, 40, 10, shade(conc, 0.8));                                   // footing
+    p.rect(4, 0, 32, 14, shade(conc, 0.55));                                    // in the deck's shadow
+    return p.finish(rgb(30, 30, 32), 0.8);
+}
+
+// ---- autumn forest
+// A broad-leaved tree in autumn colours: style 0 orange-red maple, 1 a slender golden birch
+Bitmap makeAutumnTree(int style) {
+    const bool birch = style == 1;
+    Painter p(100, birch ? 170 : 150, SS, RENDER_SCALE, 2, 2);
+    const double H = birch ? 170 : 150;
+    Color bark = birch ? rgb(232, 228, 216) : rgb(110, 84, 60);
+    p.poly({birch ? 47.0 : 44.0, H, 47, H * 0.5, 53, H * 0.5, birch ? 53.0 : 56.0, H}, Paint([=](double x, double y) {
+        double nx = std::clamp((x - 50) / 6, -0.98, 0.98);
+        Color c = lit(bark, nx, 0, std::sqrt(1 - nx * nx), 0.4, 0.1, 6);
+        if (birch && hashNoise(std::floor(x), std::floor(y / 3)) > 0.78) c = rgb(50, 46, 44);   // birch marks
+        return c;
+    }));
+    p.line(50, H * 0.62, 32, H * 0.48, 2.5, shade(bark, 0.9));
+    p.line(50, H * 0.58, 68, H * 0.45, 2.5, shade(bark, 0.9));
+    std::vector<std::array<double, 4>> balls;
+    const int nb = birch ? 26 : 24;
+    for (int i = 0; i < nb; ++i) {
+        double a = rnd(0, 6.283), r = rnd(0, 1);
+        double cx = 50 + std::cos(a) * r * (birch ? 24 : 34), cy = (birch ? 62 : 52) + std::sin(a) * r * (birch ? 50 : 34);
+        balls.push_back({cx, cy, rnd(birch ? 9 : 12, birch ? 14 : 19), rnd(0, 1)});
+    }
+    std::sort(balls.begin(), balls.end(), [](auto& a, auto& b) { return a[1] < b[1]; });
+    for (auto& b : balls) {
+        Color base = birch ? lerpColor(rgb(230, 190, 40), rgb(250, 220, 90), b[3])
+                           : (b[3] < 0.45 ? lerpColor(rgb(210, 70, 30), rgb(230, 110, 30), b[3] / 0.45)
+                                          : lerpColor(rgb(240, 140, 30), rgb(240, 190, 50), (b[3] - 0.45) / 0.55));
+        p.ellipse(b[0], b[1], b[2], b[2] * 0.9, Paint([=](double x, double y) {
+            Color c = sphere(b[0], b[1], b[2], b[2] * 0.9, base, 0.38, 0.12, 8)(x, y);
+            double n = hashNoise(x * 2.2, y * 2.2);
+            return n > 0.82 ? shade(c, 1.18) : n < 0.15 ? shade(c, 0.74) : c;
+        }));
+    }
+    return p.finish(rgb(50, 24, 10), 1.0);
+}
+
+Bitmap makeOak() {   // a big old oak in deep red and bronze: it stands where the gusts of leaves blow
+    Painter p(150, 170, SS, RENDER_SCALE, 2, 2);
+    Color bark = rgb(96, 74, 56);
+    p.poly({58, 170, 64, 96, 86, 96, 92, 170}, Paint([=](double x, double y) {
+        double nx = std::clamp((x - 75) / 13, -0.98, 0.98);
+        Color c = lit(bark, nx, 0, std::sqrt(1 - nx * nx), 0.4, 0.1, 6);
+        return hashNoise(x * 0.8, y * 0.3) > 0.7 ? shade(c, 0.78) : c;
+    }));
+    for (auto b : std::vector<std::array<double, 5>>{{75, 110, 36, 72, 5}, {75, 106, 116, 76, 5}, {75, 100, 70, 52, 4}, {44, 82, 26, 60, 3}})
+        p.line(b[0], b[1], b[2], b[3], b[4], shade(bark, 0.95));
+    std::vector<std::array<double, 4>> balls;
+    for (int i = 0; i < 40; ++i) {
+        double a = rnd(0, 6.283), r = std::sqrt(rnd(0, 1));
+        balls.push_back({75 + std::cos(a) * r * 60, 62 + std::sin(a) * r * 40, rnd(13, 21), rnd(0, 1)});
+    }
+    std::sort(balls.begin(), balls.end(), [](auto& a, auto& b) { return a[1] < b[1]; });
+    for (auto& b : balls) {
+        Color base = b[3] < 0.5 ? lerpColor(rgb(170, 40, 30), rgb(200, 70, 30), b[3] * 2)
+                                : lerpColor(rgb(190, 110, 40), rgb(160, 90, 40), (b[3] - 0.5) * 2);
+        p.ellipse(b[0], b[1], b[2], b[2] * 0.85, Paint([=](double x, double y) {
+            Color c = sphere(b[0], b[1], b[2], b[2] * 0.85, base, 0.38, 0.12, 8)(x, y);
+            double n = hashNoise(x * 2.4, y * 2.4);
+            return n > 0.84 ? shade(c, 1.2) : n < 0.14 ? shade(c, 0.72) : c;
+        }));
+    }
+    return p.finish(rgb(40, 14, 8), 1.0);
+}
+
+Bitmap makeLeaf(int kind) {   // a small falling leaf: red-orange maple or golden
+    Painter p(20, 20, SS, RENDER_SCALE, 1, 1);
+    Color base = kind == 0 ? rgb(214, 80, 30) : rgb(236, 176, 40);
+    p.poly({10, 1, 13, 5, 18, 4, 16, 9, 19, 12, 13, 13, 11, 19, 9, 19, 7, 13, 1, 12, 4, 9, 2, 4, 7, 5}, Paint([=](double x, double y) {
+        Color c = lerpColor(shade(base, 1.15), shade(base, 0.8), y / 20);
+        if (std::fabs(x - 10) < 0.5 || std::fabs((y - 11) + std::fabs(x - 10) * 0.7) < 0.45) c = shade(c, 0.72);   // veins
+        return c;
+    }));
+    p.rect(9.6, 17, 0.8, 3, shade(base, 0.5));
+    return p.finish(shade(base, 0.45), 0.4);
+}
+
+// ---- rainy night city
+// A street lamp with a warm sodium light: its cone of light falls through the rain onto a pool of light on the
+// road. The pole is on the left, the head reaches out to the right (over the road; mirrored on the right side).
+Bitmap makeRainLamp() {
+    const int w = 120, h = 200;
+    Painter p(w, h, SS, RENDER_SCALE, 2, 2);
+    Color metal = rgb(70, 72, 80);
+    // the pool of light on the wet road under the head (flat, wide, brightest in the middle)
+    p.ellipse(78, h - 3, 42, 5, Paint([=](double x, double y) {
+        double dx = (x - 78) / 42, dy = (y - (h - 3)) / 5, d = std::sqrt(dx * dx + dy * dy);
+        return alpha(rgb(255, 214, 150), 0.95 * std::pow(std::max(0.0, 1 - d), 1.2));
+    }));
+    // the cone: from the lamp head down to the road, fading and widening, with faint rain streaks in it
+    p.poly({70, 20, 86, 20, 120, double(h - 2), 36, double(h - 2)}, Paint([=](double x, double y) {
+        double t = (y - 20) / (h - 22);
+        double half = 8 + 34 * t, u = std::fabs(x - 78) / half;
+        double a = 0.62 * (1 - 0.45 * t) * std::pow(std::max(0.0, 1 - u), 1.0);
+        if (std::fmod(x * 3 + y * 0.6, 7.0) < 0.35 && hashNoise(std::floor(x * 3 + y * 0.6), 3) > 0.5) a *= 1.5;   // rain glints
+        return alpha(rgb(255, 222, 160), std::min(0.9, a));
+    }));
+    // pole, arm and the lamp head
+    p.rect(8, 16, 5, h - 16, cylX(8, 13, metal, 0.35, 0.6, 24));
+    p.roundRect(5, h - 14, 11, 14, 2, cylX(5, 16, shade(metal, 0.8), 0.35, 0.5, 20));
+    p.line(10, 18, 70, 14, 3.0, metal);
+    p.roundRect(66, 10, 24, 9, 3, cylY(10, 19, rgb(58, 60, 66), 0.35, 0.6, 24));
+    p.roundRect(68, 18, 20, 3, 1.5, rgb(255, 214, 150));
+    glow(p, 78, 21, 26, 16, rgb(255, 200, 120), 1.6);
+    return p.finish(rgb(10, 10, 14), 0.8);
+}
+
+// Dark brick apartment blocks in the rain: few, warm-lit windows, fire escapes, a lit shop at street level
+Bitmap makeRainBuilding(int kind, bool lightsOnly = false) {   // lightsOnly: just the lit windows, at the same size
+    const int w = kind == 0 ? 110 : 140, h = kind == 0 ? 240 : 180;
+    Painter p(w, h, SS, RENDER_SCALE, 2, 10);
+    Color brick = kind == 0 ? rgb(70, 48, 42) : rgb(58, 58, 64);
+    const double side = w * 0.16, fw = w - side;
+    if (lightsOnly) {   // the lit windows, nothing else
+        for (double y = 22; y < h - 30; y += 16)
+            for (double x = 7; x < fw - 10; x += 15) {
+                double r = hashNoise(x * 3 + kind * 11, y * 1.7);
+                if (r >= 0.32) continue;
+                Color c = r < 0.2 ? rgb(255, 196, 110) : rgb(250, 220, 160);
+                p.rect(x, y, 9, 11, vgrad(y, y + 11, c, shade(c, 0.75)));
+                glow(p, x + 4.5, y + 5.5, 8, 8, c, 0.35);
+            }
+        return p.finish(0, 0);
+    }
+    p.rect(0, 10, fw, h - 10, Paint([=](double x, double y) {
+        int row = int(std::floor(y / 3));
+        double off = (row & 1) * 3;
+        Color c = shade(brick, 0.85 + 0.25 * hashNoise(std::floor((x + off) / 6), row));
+        if (std::fmod(y, 3.0) < 0.5 || std::fmod(x + off, 6.0) < 0.5) c = shade(brick, 0.6);
+        // wet: a faint sheen running down
+        return lerpColor(c, rgb(120, 130, 150), 0.08 * hashNoise(std::floor(x), 7));
+    }));
+    p.poly({fw, 10, double(w), 4, double(w), double(h), fw, double(h)}, shade(brick, 0.5));
+    p.rect(-1, 6, fw + 2, 5, shade(brick, 1.2));                               // cornice
+    // windows: mostly dark, some warm
+    for (double y = 22; y < h - 30; y += 16)
+        for (double x = 7; x < fw - 10; x += 15) {
+            double r = hashNoise(x * 3 + kind * 11, y * 1.7);
+            bool on = r < 0.32;
+            Color c = r < 0.2 ? rgb(255, 196, 110) : rgb(250, 220, 160);
+            p.rect(x, y, 9, 11, on ? vgrad(y, y + 11, c, shade(c, 0.6)) : vgrad(y, y + 11, rgb(26, 28, 36), rgb(16, 16, 22)));
+            if (on) glow(p, x + 4.5, y + 5.5, 8, 8, c, 0.35);
+            p.rect(x - 1, y + 11, 11, 1.4, shade(brick, 1.3));
+        }
+    // a zig-zag fire escape
+    if (kind == 0) {
+        Color iron = rgb(40, 40, 44);
+        for (double y = 36; y < h - 40; y += 32) {
+            p.rect(fw * 0.55, y, fw * 0.38, 1.6, iron);
+            for (double x = fw * 0.55; x < fw * 0.93; x += 3) p.rect(x, y - 6, 0.8, 6, iron);
+            p.line(fw * 0.57, y, fw * 0.9, y + 32, 1.4, iron);
+        }
+    }
+    // street level: a lit shop window under an awning
+    p.rect(0, h - 26, fw, 26, rgb(20, 20, 24));
+    p.rect(6, h - 22, fw - 12, 18, vgrad(h - 22, h - 4, rgb(255, 220, 160), rgb(200, 130, 70)));
+    p.rect(2, h - 28, fw - 4, 5, kind == 0 ? rgb(40, 80, 60) : rgb(110, 30, 34));
+    glow(p, fw / 2, h - 12, fw * 0.5, 12, rgb(255, 200, 130), 0.5);
+    return p.finish(rgb(6, 6, 10), 1.0);
+}
+
+// A rain puddle lying on the road: dark water reflecting streaks of the street lights, a soft rim
+Bitmap makePuddle() {
+    const int w = 200, h = 24;
+    Painter p(w, h, SS, RENDER_SCALE, 1, 1);
+    p.ellipse(100, 12, 98, 11, Paint([=](double x, double y) {
+        double dx = (x - 100) / 98, dy = (y - 12) / 11, d = std::sqrt(dx * dx + dy * dy);
+        if (d > 1) return TRANSPARENT;
+        double rim = std::clamp((d - 0.82) / 0.18, 0.0, 1.0);
+        Color c = lerpColor(rgb(16, 18, 26), rgb(40, 44, 54), 0.5 + 0.5 * dy);
+        // reflections: a few long vertical streaks of warm light
+        for (double sx : {40.0, 104.0, 162.0}) {
+            double s = std::max(0.0, 1 - std::fabs(x - sx) / 5);
+            c = lerpColor(c, rgb(255, 200, 130), 0.55 * s * (1 - std::fabs(dy)));
+        }
+        if (hashNoise(std::floor(x / 3), std::floor(y)) > 0.985) c = lerpColor(c, rgb(170, 180, 200), 0.5);   // ripples
+        return alpha(c, 0.92 * (1 - rim * 0.7));
+    }));
+    return p.finish(0, 0);
+}
 } // namespace
 
 void Graphics::generate() {
@@ -2273,4 +2496,36 @@ void Graphics::generate() {
     sprite[SPR_VILLA2] = makeTuscanHouse(0);
     sprite[SPR_VILLA3] = makeTuscanHouse(1);
     sprite[SPR_VINES] = makeVines();
+
+    // ---- 1.4: stages 12-13 (autumn forest, rainy night city) and the bridges, each in its own seeded block
+    rng.seed(7201);
+    sprite[SPR_BRIDGE] = makeBridge(false);
+    sprite[SPR_BRIDGE_PILLAR] = makeBridgePillar(false);
+    bridgeNight = makeBridge(true);
+    bridgePillarNight = makeBridgePillar(true);
+    rng.seed(7202);
+    sprite[SPR_AUTUMN_TREE1] = makeAutumnTree(0);
+    sprite[SPR_AUTUMN_TREE2] = makeAutumnTree(1);
+    sprite[SPR_OAK] = makeOak();
+    leaf[0] = makeLeaf(0);
+    leaf[1] = makeLeaf(1);
+    rng.seed(7203);
+    sprite[SPR_PUDDLE] = makePuddle();
+    sprite[SPR_RAIN_LAMP] = makeRainLamp();
+    sprite[SPR_RAIN_BUILDING1] = makeRainBuilding(0);
+    sprite[SPR_RAIN_BUILDING2] = makeRainBuilding(1);
+    rainLights[0] = makeRainBuilding(0, true);
+    rainLights[1] = makeRainBuilding(1, true);
+    rng.seed(7204);
+    bg[11].push_back(sunLayer(rgb(255, 248, 220), rgb(255, 200, 120), 18, false, 0.03, -90));
+    bg[11].push_back(cirrusLayer(rgb(255, 240, 220), 0.02, -110));
+    bg[11].push_back(cloudLayer(7, rgb(255, 246, 232), 0.05, -70));
+    bg[11].push_back(ridgeLayer(90, 30, 85, 2, rgb(150, 140, 170), rgb(186, 170, 180), 0.04, 0, 0, false, 2));
+    bg[11].push_back(ridgeLayer(70, 20, 60, 3, rgb(196, 110, 50), rgb(170, 96, 46), 0.08, 0, 0, false, 2));
+    bg[11].push_back(treeLineLayer(rgb(170, 70, 34), 0.15, 0));
+    bg[11].push_back(treeLineLayer(rgb(120, 50, 26), 0.25, 4));
+    rng.seed(7205);
+    bg[12].push_back(cloudLayer(10, rgb(54, 52, 60), 0.03, -80));
+    bg[12].push_back(upscaled(skylineLayer(125, rgb(30, 31, 40), false, 0.04, 0)));
+    bg[12].push_back(upscaled(skylineLayer(95, rgb(20, 21, 28), false, 0.08, 0)));
 }

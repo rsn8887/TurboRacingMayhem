@@ -87,6 +87,9 @@ double referenceTime(const Track& track, double z0, double z1, double v0, double
         const Segment& s = track.find(z);
         double a = carAccel(st, vi / MAX_SPEED, 1.0, s.surface == SURF_DIRT, false, track.groundSlope(z)) * MAX_SPEED;
         v[size_t(i) + 1] = std::min(cap[size_t(i) + 1], std::sqrt(std::max(0.0, vi * vi + 2 * a * dz)));
+        if (track.theme.rain)                                     // the time limit allows for driving through every puddle
+            for (const auto& sp : s.sprites)
+                if (sp.type == SPR_PUDDLE) { v[size_t(i) + 1] *= std::pow(PUDDLE_DRAG, dz / vi); break; }
     }
     for (int i = n - 1; i >= 0; --i)                              // brake just in time
         v[size_t(i)] = std::min(v[size_t(i)], std::sqrt(v[size_t(i) + 1] * v[size_t(i) + 1] + 2 * BRAKE_DECEL * MAX_SPEED * dz));
@@ -679,6 +682,24 @@ void Race::physicsCommon(Car& c, double dt) {
     c.bumpTimer = std::max(0.0, c.bumpTimer - dt);
     c.wallScrape = std::max(0.0, c.wallScrape - dt);
     c.shake = std::max(0.0, c.shake - dt * 2);
+
+    // puddles: water drags the car back and sprays up from the tyres
+    c.splash = std::max(0.0, c.splash - dt);
+    if (track.theme.rain && c.air < 60 && c.speed > 1000 * SPEED_SCALE) {
+        for (const auto& s : track.find(c.dist).sprites) {
+            if (s.type != SPR_PUDDLE) continue;
+            const Bitmap& b = gfx.sprite[SPR_PUDDLE];
+            double half = SPRITE_INFO[SPR_PUDDLE].worldH * b.w / b.h / ROAD_WIDTH * 0.5 * 0.85;
+            if (std::fabs(c.x - s.offset) > half + CAR_HALF * 0.4) continue;
+            bool entering = c.splash < 0.1;
+            c.speed *= std::pow(PUDDLE_DRAG, dt);
+            c.splash = 0.4;
+            if (entering && phase == RacePhase::Racing)
+                for (const Car& o : cars)   // heard when it happens near a human player
+                    if (o.player >= 0 && std::fabs(delta(o.dist, c.dist)) < 15 * SEG_LEN) { audio.play(SFX_SPLASH); break; }
+            break;
+        }
+    }
 }
 
 void Race::collisions(double) {

@@ -1,0 +1,6 @@
+# scenery atlas: name  x y w h
+bridge  608 1 1288 304
+bridge_pillar  519 1 88 324
+autumn_tree1  1 346 208 304
+autumn_tree2  1 1 208 344
+oak  210 1 308 344
