@@ -820,10 +820,17 @@ void Track::decorate(unsigned seed) {
             if (i % 16 == 0 && !gantry && !sign) add(i, SPR_RAIN_LAMP, (i / 16) % 2 ? 1.35 : -1.35);
             if (i % 16 == 0) add(i, rnd2(0, 1) < 0.55 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(2.8, 4.5));
             if (rnd2(0, 1) < 0.015) add(i, rnd2(0, 1) < 0.5 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(5.0, 8.0));
-            if (i % 23 == 11 && !gantry && rnd2(0, 1) < 0.75 && segs[i].surface == SURF_ASPHALT &&
-                std::fabs(segs[i].w1 - 1) < 0.3) {                   // a puddle in the road, three segments long
-                double off = rnd2(-0.7, 0.7);
-                for (int k = 0; k < 3; ++k) add(i + k, SPR_PUDDLE, off + rnd2(-0.04, 0.04));
+            // puddles come in small groups (2-4, about 8-14 segments apart) with long dry stretches in between
+            if (i % 130 == 40 && !gantry && rnd2(0, 1) < 0.75) {
+                int k0 = i, cnt = 2 + int(rnd2(0, 3));
+                for (int g = 0; g < cnt && k0 < n - 8; ++g) {
+                    const Segment& sg = segs[k0];
+                    if (sg.surface == SURF_ASPHALT && std::fabs(sg.w1 - 1) < 0.3 && !sg.tunnel) {
+                        double off = rnd2(-0.7, 0.7);
+                        for (int k = 0; k < 3; ++k) add(k0 + k, SPR_PUDDLE, off + rnd2(-0.04, 0.04));
+                    }
+                    k0 += 8 + int(rnd2(0, 7));
+                }
             }
             break;
         default:  // 10 Florence
@@ -841,7 +848,7 @@ void Track::decorate(unsigned seed) {
     if (stage == 11 || stage == 12) {
         int last = -1000;
         for (int i = 150; i < n - 60; ++i) {
-            if (i - last < 280) continue;
+            if (i - last < 800) continue;
             bool ok = std::abs(i - checkpoint) > 30;
             for (int k = i - 12; ok && k <= i + 12; ++k) {
                 const Segment& s = segs[k];
@@ -853,10 +860,12 @@ void Track::decorate(unsigned seed) {
             if (!ok) continue;
             for (int k = i - 3; k <= i + 3; ++k) {
                 auto& v = segs[k].sprites;
-                v.erase(std::remove_if(v.begin(), v.end(), [](const SpriteInst& si) { return std::fabs(si.offset) < 6.5; }), v.end());
+                v.erase(std::remove_if(v.begin(), v.end(), [](const SpriteInst& si) { return std::fabs(si.offset) < 14.5; }), v.end());
             }
-            segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, -1.6});
-            segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, 1.6});
+            for (double off : {1.6, 5.2, 9.0, 13.0}) {      // by the road, then on out under the long deck
+                segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, -off});
+                segs[i].sprites.push_back({SPR_BRIDGE_PILLAR, off});
+            }
             segs[i].sprites.push_back({SPR_BRIDGE, 0});
             for (int k = i - 1; k <= i + 2; ++k) segs[k].shadow = true;
             bridges_.push_back(i);

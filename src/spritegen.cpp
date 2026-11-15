@@ -2309,22 +2309,33 @@ Bitmap makeRainBuilding(int kind, bool lightsOnly = false) {   // lightsOnly: ju
     return p.finish(rgb(6, 6, 10), 1.0);
 }
 
-// A rain puddle lying on the road: dark water reflecting streaks of the street lights, a soft rim
+// A rain puddle lying on the road: blue water that mirrors the night sky (deep blue in the near part, paler
+// towards the far edge, as reflections do), long shimmering streaks of the street lamps and a bright wet rim.
 Bitmap makePuddle() {
-    const int w = 200, h = 24;
+    const int w = 200, h = 26;
     Painter p(w, h, SS, RENDER_SCALE, 1, 1);
-    p.ellipse(100, 12, 98, 11, Paint([=](double x, double y) {
-        double dx = (x - 100) / 98, dy = (y - 12) / 11, d = std::sqrt(dx * dx + dy * dy);
+    p.ellipse(100, 13, 98, 12, Paint([=](double x, double y) {
+        double dx = (x - 100) / 98, dy = (y - 13) / 12, d = std::sqrt(dx * dx + dy * dy);
         if (d > 1) return TRANSPARENT;
-        double rim = std::clamp((d - 0.82) / 0.18, 0.0, 1.0);
-        Color c = lerpColor(rgb(16, 18, 26), rgb(40, 44, 54), 0.5 + 0.5 * dy);
-        // reflections: a few long vertical streaks of warm light
-        for (double sx : {40.0, 104.0, 162.0}) {
-            double s = std::max(0.0, 1 - std::fabs(x - sx) / 5);
-            c = lerpColor(c, rgb(255, 200, 130), 0.55 * s * (1 - std::fabs(dy)));
+        // the sky in the water: paler at the far edge (top), deep blue near
+        Color c = lerpColor(rgb(90, 140, 210), rgb(24, 60, 130), 0.5 + 0.5 * dy);
+        // street-lamp reflections: long vertical streaks, broken up by ripples
+        for (double sx : {34.0, 92.0, 150.0, 176.0}) {
+            double wob = std::sin(y * 1.9 + sx) * 1.6;
+            double s = std::max(0.0, 1 - std::fabs(x - sx - wob) / (sx > 160 ? 3.0 : 5.5));
+            c = lerpColor(c, sx > 160 ? rgb(200, 230, 255) : rgb(255, 214, 140), 0.85 * s * (0.6 + 0.4 * std::fabs(std::sin(y * 0.9 + sx))));
         }
-        if (hashNoise(std::floor(x / 3), std::floor(y)) > 0.985) c = lerpColor(c, rgb(170, 180, 200), 0.5);   // ripples
-        return alpha(c, 0.92 * (1 - rim * 0.7));
+        // a sheen near the far edge
+        c = lerpColor(c, rgb(190, 220, 255), 0.35 * std::max(0.0, -dy - 0.3));
+        // ripple rings from the rain
+        for (int k = 0; k < 7; ++k) {
+            double rx = 16 + hashNoise(k, 3) * 168, ry = 6 + hashNoise(k, 5) * 14, rr = 3 + hashNoise(k, 7) * 6;
+            double dd = std::hypot((x - rx) / rr, (y - ry) / (rr * 0.35));
+            if (std::fabs(dd - 1) < 0.18) c = lerpColor(c, rgb(210, 230, 255), 0.55);
+        }
+        // the wet rim: a thin bright edge
+        if (d > 0.9) c = lerpColor(c, rgb(150, 180, 220), (d - 0.9) / 0.1 * 0.7);
+        return alpha(c, d > 0.94 ? 0.95 * (1 - d) / 0.06 + 0.05 : 0.95);
     }));
     return p.finish(0, 0);
 }

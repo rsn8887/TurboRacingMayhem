@@ -1,5 +1,5 @@
 # scenery atlas: name  x y w h
-puddle  768 1 404 50
+puddle  768 1 404 54
 rain_lamp  230 1 248 404
 rain_building1  1 1 228 500
 rain_building2  479 1 288 380

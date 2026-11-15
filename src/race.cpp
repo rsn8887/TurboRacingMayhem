@@ -693,7 +693,7 @@ void Race::physicsCommon(Car& c, double dt) {
             if (std::fabs(c.x - s.offset) > half + CAR_HALF * 0.4) continue;
             bool entering = c.splash < 0.1;
             c.speed *= std::pow(PUDDLE_DRAG, dt);
-            c.splash = 0.4;
+            c.splash = 0.6;
             if (entering && phase == RacePhase::Racing)
                 for (const Car& o : cars)   // heard when it happens near a human player
                     if (o.player >= 0 && std::fabs(delta(o.dist, c.dist)) < 15 * SEG_LEN) { audio.play(SFX_SPLASH); break; }
@@ -801,7 +801,13 @@ void Race::updateFlair(double dt) {
             Car& c = cars[fi];
             for (int seg : track.confetti_) {
                 double d = track.wrap(seg * SEG_LEN - c.dist);
-                if (d > 0 && d < std::max(18 * SEG_LEN, c.speed * 1.3)) {
+                // (the leaves in the autumn forest are shaken loose earlier - they need time to float down - but only
+                // once the car has passed the previous oaks, so a gust it is still driving through is never replaced)
+                bool autumn = track.stage == 11;
+                double reach = autumn ? std::min(c.speed * 3.0, 150.0 * SEG_LEN) : c.speed * 1.3;
+                if (autumn && c.confettiZ > -1e8 && c.dist < c.confettiZ + 8 * SEG_LEN && std::fabs(d - (c.confettiZ - c.dist)) > SEG_LEN)
+                    continue;
+                if (d > 0 && d < std::max(18 * SEG_LEN, reach)) {
                     double z = c.dist + d;
                     if (std::fabs(z - c.confettiZ) > SEG_LEN) { c.confettiZ = z; c.confettiT = time; }
                 }

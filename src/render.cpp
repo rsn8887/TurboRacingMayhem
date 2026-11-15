@@ -29,11 +29,21 @@ struct Proj {
 // per thread (strips are rendered in parallel). Kept on the heap: big thread-local arrays would need a big
 // per-thread TLS block, which some platforms (Switch) don't give their threads.
 thread_local std::vector<Proj> projBuf;
-thread_local std::vector<std::array<double, 2>> g_tyrePts;   // rear tyre contact points of the car drawn last
+thread_local std::vector<std::array<double, 2>> g_tyrePts;
+thread_local bool g_nightLights = false;   // rainy night: cars drive with their lights on   // rear tyre contact points of the car drawn last
 thread_local std::vector<double> ceilBuf;   // rows above this are hidden behind nearer tunnel ceilings
 
 inline double fogAt(const Theme& th, double z) {
     return th.fogDensity > 0 ? std::min(0.92, 1 - std::exp(-th.fogDensity * z)) : 0.0;
+}
+
+// A car in the shadow of a bridge: darken it by the same 42% as the road there, on top of its fog. Returns the
+// fog amount and colour that give lerp(lerp(c, fogColor, fog), black, 0.42) in a single blend.
+inline void shadeUnderBridge(double& fog, Color& fogColor) {
+    const double k = 0.58;                                   // light left in the shadow
+    double F = 1 - k * (1 - fog);
+    fogColor = F > 0 ? shade(fogColor, k * fog / F) : rgb(0, 0, 0);
+    fog = F;
 }
 
 unsigned hashRand(unsigned x) { x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16; return x; }
@@ -170,6 +180,16 @@ double tunnelCarShade(double dist, double viewDepth) {
 
 const Color TUNNEL_BLACK = rgb(4, 4, 7);
 
+// rainy night: the headlight brightening of the road at depth z (see drawRoadRow)
+inline double rainLit(double z) { return 1.1 * std::pow(std::clamp(1 - z / (45 * SEG_LEN), 0.0, 1.0), 1.6); }
+// how dark a car at depth z is in a tunnel: in the rainy night's brightly lit tunnel exactly as dark as the road
+// around it, elsewhere the usual tunnel gloom with a flash under each row of lamps
+inline double carTunnelShade(const Theme& th, double dist, double z) {
+    // (in the rainy night, still a little darker between the rows of lamps and brightest right under each one)
+    return th.rain ? std::min(0.85, tunnelDark(z) * (1 - std::min(1.0, rainLit(z))) + 0.32 * (1 - tunnelLampLight(dist)))
+                   : tunnelCarShade(dist, z);
+}
+
 // one scanline of road. hw = half width of the road on screen (already includes the width factor w)
 // outside = the camera is not in this tunnel: the ground beside the tunnel is then the grey concrete of the
 // tunnel structure (seen beyond the entrance wall from up a hill), not the black of the inside
@@ -180,11 +200,16 @@ void drawRoadRow(Canvas& cv, const Rect& vp, const Theme& th, int y, double cx, 
     const double lf = lightFrac(worldZ - span / 2, worldZ + span / 2, STRIPE_LEN);   // filtered stripe
     auto LD = [lf](Color l, Color d) { return lerpColor(d, l, lf); };
     const double detail = std::clamp(1 - span / 120, 0.0, 1.0);    // fine detail fades out with distance
-    double fog = fogAt(th, z);
+    double fog = tunnel && th.rain ? 0.0 : fogAt(th, z);              // the tunnel lights cut through the night: no haze
     double dark = tunnel ? tunnelDark(z) : seg.shadow ? 0.42 : 0;     // in the shadow of a bridge
+    // rainy night: the player's headlights light up the wet road just ahead, falling off into the dark
+    // (in the tunnel too, just as bright: the road near the car looks the same in and out of the tunnel)
+    const double lit = th.rain ? rainLit(z) : 0;
+    const double darkHere = tunnel && th.rain ? dark * (1 - std::min(1.0, lit)) : dark;   // the headlights beat the gloom
     auto F = [&](Color c) {
+        if (lit > 0) c = lerpColor(c, shade(lerpColor(c, rgb(200, 196, 180), 0.25), 2.4), std::min(1.0, lit) * (seg.shadow && !tunnel ? 0.4 : 1));
         if (fog > 0) c = lerpColor(c, th.fogColor, fog);
-        return dark > 0 ? lerpColor(c, TUNNEL_BLACK, dark) : c;
+        return darkHere > 0 ? lerpColor(c, TUNNEL_BLACK, darkHere) : c;
     };
     const double k = 1.0 / w;    // converts standard-road distances into u for this width
     auto spanU = [&](double u0, double u1, Color c) { cv.spanAA(cx + u0 * hw, cx + u1 * hw, y, c); };
@@ -425,6 +450,9 @@ void drawCarSprite(Canvas& cv, const Car& c, double cx, double bottom, double gr
     drawCarShadow(cv, c.type, yawIdx, elevIdx, cx - w / 2, groundTop, w, h, shadowClip, sa);
     double top = bottom - h * double(CAR_ANCHOR_Y) / CAR_BMP_H;
     drawCar(cv, c.type, CAR_COLORS[c.color], yawIdx, elevIdx, c.braking, cx - w / 2, top, w, h, clip, fog, fogColor);
+    if (g_nightLights)                                  // tail lights glow red, even far off in the dark
+        drawCarTailLights(cv, c.type, CAR_COLORS[c.color], yawIdx, elevIdx, cx - w / 2, top, w, h, clip, fog * 0.15, fogColor,
+                          &gfx.lampGlow);
     carTyres(c.type, yawIdx, elevIdx, cx - w / 2, top, w, h, g_tyrePts);   // for the tyre smoke drawn after it
     // nitrous: a flame out of every exhaust pipe, exactly where the pipe is in this frame
     if (c.boostVis > 0.05 && c.crashTimer <= 0) {
@@ -590,27 +618,27 @@ void drawSplash(Canvas& cv, const std::vector<std::array<double, 2>>& tyres, dou
         double side = k ? 1 : -1;
         for (int j = 0; j < 3; ++j) {
             double fl = 0.8 + 0.2 * std::sin(t * 23 + j * 2 + k);
-            double w = bw * (0.32 + 0.14 * j) * fl, h = bw * (0.3 + 0.12 * j) * fl;
+            double w = bw * (0.42 + 0.18 * j) * fl, h = bw * (0.4 + 0.16 * j) * fl;
             double x = o[0] + side * bw * (0.04 + 0.1 * j) - w / 2, y = o[1] - h * 0.9 - bw * 0.04 * j;
-            cv.blitScaled(gfx.smoke, x, y, w, h, false, clip, 0.45, rgb(214, 224, 236), (0.5 - 0.12 * j) * vis);
+            cv.blitScaled(gfx.smoke, x, y, w, h, false, clip, 0.5, rgb(190, 214, 245), (0.62 - 0.14 * j) * vis);
         }
     }
     // drops
-    const int N = bw > 60 ? 80 : bw > 20 ? 34 : 10;
+    const int N = bw > 60 ? 140 : bw > 20 ? 56 : 16;
     for (int i = 0; i < N; ++i) {
-        const double life = 0.32 + 0.2 * frand(unsigned(i) * 71 + seed);
+        const double life = 0.36 + 0.24 * frand(unsigned(i) * 71 + seed);
         double ph = t / life + double(i) / N;
         double cyc = std::floor(ph), age = ph - cyc;
         unsigned sd = unsigned(cyc) * 113 + unsigned(i) * 29 + seed;
         double r1 = frand(sd), r2 = frand(sd + 1), r3 = frand(sd + 2);
         const std::array<double, 2>& o = (i & 1) ? R : L;
         double side = (i & 1) ? 1 : -1;
-        double vx = side * (0.2 + 1.6 * r1) * bw, vy = -(1.0 + 1.8 * r2) * bw;
+        double vx = side * (0.3 + 2.0 * r1) * bw, vy = -(1.3 + 2.3 * r2) * bw;
         const double g = 7.0 * bw, ts = age * life;
         double x = o[0] + vx * ts, y = o[1] - bw * 0.04 + vy * ts + 0.5 * g * ts * ts;
         if (y > clip) continue;
-        double sz = std::max(1.0, bw * (0.012 + 0.016 * r3));
-        Color c = r3 < 0.3 ? rgb(255, 214, 160) : rgb(200, 214, 232);   // some catch the lamp light
+        double sz = std::max(1.0, bw * (0.014 + 0.02 * r3));
+        Color c = r3 < 0.25 ? rgb(255, 214, 160) : r3 < 0.6 ? rgb(150, 190, 245) : rgb(215, 230, 250);   // some catch the lamp light
         double a = vis * 0.75 * (age > 0.6 ? (1 - age) / 0.4 : 1.0);
         cv.rectBlend(int(x - sz / 2), int(y - sz / 2), int(std::ceil(sz)), int(std::ceil(sz)), c, a);
     }
@@ -816,6 +844,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
     while (insideRun < DRAW_DIST && tr.segs[(base.index + insideRun) % N].tunnel) ++insideRun;
     // deep in a tunnel whose exit lies beyond the draw distance: the far end is black, not sky - only a real
     // exit (drawn as a bright hole) may show the outside
+    g_nightLights = th.rain;
     if (insideRun >= DRAW_DIST) cv.rect(vp.x, vp.y, vp.w, vp.h, TUNNEL_BLACK);
     else drawBackground(cv, vp, th, car, horizonY, s, tr.stage);
 
@@ -1188,17 +1217,42 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 // walls, but on the same curve, so no window ever floats where its wall has gone.
                 double sink = th.rain ? std::clamp((p.z1 / SEG_LEN - 120) / 80, 0.0, 1.0) : 0;
                 if (lights && sink >= 1) continue;
-                double f = si.type == SPR_RAIN_LAMP ? fog * 0.2 : th.rain && si.type == SPR_BRIDGE ? fog * 0.75
+                double f = si.type == SPR_PUDDLE ? fog : si.type == SPR_RAIN_LAMP ? fog * 0.2 : th.rain && (si.type == SPR_BRIDGE || si.type == SPR_BRIDGE_PILLAR) ? fog * 0.9
                          : lights ? std::max(fog * 0.9, sink) : fog;
+                // rainy night: things close by are caught in the headlights - lit up, the nearer the brighter
+                Color fc = th.fogColor;
+                if (th.rain && si.type != SPR_PUDDLE) {
+                    double lit = 0.42 * std::pow(std::clamp(1 - p.z1 / (45 * SEG_LEN), 0.0, 1.0), 1.6);
+                    if (lit > f) { f = lit; fc = rgb(236, 226, 200); }
+                }
                 if (!(th.rain && f > 0.86) || lights)       // (lost in the dark: not worth drawing)
-                    cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, f, th.fogColor);
+                    cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, f, fc);
                 if (lights && f > 0.3)                      // the windows glow on as the wall darkens
                     cv.blitScaled(gfx.rainLights[si.type == SPR_RAIN_BUILDING2], sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip,
                                   std::max(fog * 0.6, sink), th.fogColor);
+                if (si.type == SPR_PUDDLE && dw > 24) {     // raindrops landing in the water: rings that spread
+                    double ph0 = race.time * 1.7 + seg.index * 0.37;
+                    for (int k = 0; k < 4; ++k) {
+                        double ph = ph0 + k * 0.25, age = ph - std::floor(ph);
+                        unsigned sd = unsigned(std::floor(ph)) * 97 + unsigned(k) * 13 + unsigned(seg.index) * 7;
+                        double rx = sx + (frand(sd) - 0.5) * dw * 0.7, ry = p.y1 - dh * (0.3 + 0.4 * frand(sd + 1));
+                        double rr = dw * (0.02 + 0.07 * age), a = 0.7 * (1 - age) * (1 - f);
+                        for (int q = 0; q < 20; ++q) {
+                            double an = q * M_PI / 10;
+                            double px = rx + std::cos(an) * rr, py = ry + std::sin(an) * rr * 0.3;
+                            if (py < p.clip) cv.rectBlend(int(px), int(py), std::max(1, int(s)), std::max(1, int(s * 0.7)), rgb(200, 225, 255), a);
+                        }
+                    }
+                }
                 if (si.type == SPR_BRIDGE && dw > 4)        // the deck runs on out to both screen edges
+                {
+                    // the image has a 2-unit transparent margin each side (of 644): step by the deck's own width, a
+                    // hair less, so the copies join without a seam
+                    const double step = dw * 640.0 / 644.0 - 0.6;
                     for (int sd : {-1, 1})
-                        for (double tx = sx - dw / 2 + sd * dw; tx + dw > vp.x && tx < vp.x + vp.w; tx += sd * dw)
-                            cv.blitScaled(bmp, tx, p.y1 - dh, dw, dh, false, p.clip, f, th.fogColor);
+                        for (double tx = sx - dw / 2 + sd * step; tx + dw > vp.x && tx < vp.x + vp.w; tx += sd * step)
+                            cv.blitScaled(bmp, tx, p.y1 - dh, dw, dh, false, p.clip, f, fc);
+                }
             }
         }
         while (wi < weedRefs.size() && weedRefs[wi].n > n) ++wi;
@@ -1235,7 +1289,8 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             double lift = c.air * sc * focal;
             double fogC = fogAt(th, z);
             Color fogCol = th.fogColor;
-            if (c.inTunnel) { fogC = tunnelCarShade(c.dist, z); fogCol = TUNNEL_BLACK; }
+            if (c.inTunnel) { fogC = carTunnelShade(th, c.dist, z); fogCol = TUNNEL_BLACK; }
+            else if (tr.find(c.dist).shadow) shadeUnderBridge(fogC, fogCol);   // in a bridge's shadow
             double carX = rcx + sc * c.x * ROAD_WIDTH * focal;
             // viewing angle from the camera: horizontal screen offset / focal length = tan(angle)
             // the focal length in pixels is depth * focal (screen x = world x * depth / z * focal)
@@ -1277,8 +1332,10 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         double bounce = (car.speed > 100 && !car.airborne) ? std::sin(race.time * 30 + carIndex) * 0.6 * s : 0;
         if (car.offroad && car.speed > 500) bounce += (frand(opt.frame * 13 + carIndex) - 0.5) * 3 * s;
         double tint = 0;
-        if (car.inTunnel) tint = tunnelCarShade(car.dist, 0);   // dark, lit up briefly under each row of lamps
-        drawCarSprite(cv, car, cx, by + bounce, groundScreen, w, 1e9, tint, TUNNEL_BLACK, std::clamp(1 - car.air / 2400, 0.35, 1.0),
+        Color tintCol = TUNNEL_BLACK;
+        if (car.inTunnel) tint = carTunnelShade(th, car.dist, 0);   // dark, lit up briefly under each row of lamps
+        else if (tr.find(car.dist).shadow) { tint = 0; tintCol = th.fogColor; shadeUnderBridge(tint, tintCol); }
+        drawCarSprite(cv, car, cx, by + bounce, groundScreen, w, 1e9, tint, tintCol, std::clamp(1 - car.air / 2400, 0.35, 1.0),
                       0, CAR_ELEV_DEG[CAR_ELEV_LEVEL], unsigned(opt.frame));
 
         double bw = CAR_WORLD_W * sc * focal, bh = bw * 0.45;
@@ -1357,20 +1414,31 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
             }
         }
         // autumn leaves: a gust shakes them from the old oaks as the car comes by - they swirl out across the road
-        // and towards us, tumbling and fluttering, then sink slowly to the ground
-        if (tr.stage == 11 && age >= 0 && age < 5.0) {
+        // and towards us, tumbling and fluttering, and sink to the ground, where they lie on the road for a while
+        // (until the car has passed them, or they fade after a while)
+        const double LEAF_LIFE = 16.0;
+        if (tr.stage == 11 && age >= 0 && age < LEAF_LIFE) {
             double zRelBase = car.confettiZ - (car.dist - camBack);
             for (int i = 0; i < 200; ++i) {
                 double r0 = frand(i * 13 + 1), r1 = frand(i * 13 + 2), r2 = frand(i * 13 + 3), r3 = frand(i * 13 + 4), r4 = frand(i * 13 + 5);
                 double side = (i & 1) ? 1 : -1;
                 double a = age - r4 * 0.6;               // the gust keeps shaking leaves loose for a moment
                 if (a < 0) continue;
-                double k = 1.1, e = (1 - std::exp(-k * a)) / k;
-                double vx = -side * (900 + 3800 * r0), vz = -(1500 + 6500 * r1), vy = 300 + 900 * r2;
-                double X = side * (1.75 * ROAD_WIDTH + 600 * (r2 - 0.5)) + vx * e + std::sin(a * (1.6 + r3 * 2) + r0 * 6) * 380;
-                double Zw = zRelBase + vz * e + std::cos(a * (1.3 + r2) + r1 * 6) * 250;
-                double Y = 2600 + 1400 * r3 + vy * e - 520 * a;
-                if (Y < 0 || Zw < 380) continue;
+                const double k = 1.1;
+                double vx = -side * (900 + 3800 * r0), vz = -(1000 + 4500 * r1), vy = 100 + 500 * r2;
+                double Y0 = 1500 + 1300 * r3;
+                auto E = [&](double t) { return (1 - std::exp(-k * t)) / k; };
+                auto height = [&](double t) { return Y0 + vy * E(t) - 900 * t; };
+                // when it lands (height falls through 0): found once by bisection, after which it lies still
+                double lo = 0, hi = 12;
+                for (int it = 0; it < 14; ++it) { double m = (lo + hi) / 2; (height(m) > 0 ? lo : hi) = m; }
+                bool landed = a >= hi;
+                double ta = landed ? hi : a;
+                double e = E(ta);
+                double X = side * (1.75 * ROAD_WIDTH + 600 * (r2 - 0.5)) + vx * e + std::sin(ta * (1.6 + r3 * 2) + r0 * 6) * 380;
+                double Zw = zRelBase + vz * e + std::cos(ta * (1.3 + r2) + r1 * 6) * 250;
+                double Y = landed ? 0 : height(ta);
+                if (Zw < 380) continue;                  // passed: behind the camera
                 int n = int(Zw / SEG_LEN);
                 if (n < 1 || n >= DRAW_DIST - 1) continue;
                 const Proj& pp = proj[n];
@@ -1380,11 +1448,17 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 scr(X + roadX, Y + (tr.heightAt(car.dist - camBack + Zw) - groundAtCar), Zw, sx, sy);
                 if (sy > pp.clip) continue;
                 double sz = std::min(150 / Zw * kz, 26.0 * s);
-                double flip = std::cos(a * (3 + 5 * r3) + r0 * 6.28);            // tumbling: it turns edge-on
-                double wv = sz * std::max(0.2, std::fabs(flip));
-                double fade = std::min(1.0, (5.0 - age) / 1.2) * std::min(1.0, (Zw - 380) / 500);
-                cv.blitScaled(gfx.leaf[r2 < 0.55 ? 0 : 1], sx - wv / 2, sy - sz / 2, wv, sz, flip < 0, 1e9, fogAt(th, Zw) * 0.6,
-                              th.fogColor, fade);
+                double fade = std::min(1.0, (LEAF_LIFE - age) / 2.0) * std::min(1.0, (Zw - 380) / 500);
+                if (landed) {                            // lying flat on the road: seen at a low angle, no tumbling
+                    double wv = sz * (0.7 + 0.3 * r0), hv = sz * 0.3;
+                    cv.blitScaled(gfx.leaf[r2 < 0.55 ? 0 : 1], sx - wv / 2, sy - hv, wv, hv, r1 < 0.5, pp.clip, fogAt(th, Zw) * 0.6,
+                                  th.fogColor, fade);
+                } else {
+                    double flip = std::cos(a * (3 + 5 * r3) + r0 * 6.28);      // tumbling: it turns edge-on
+                    double wv = sz * std::max(0.2, std::fabs(flip));
+                    cv.blitScaled(gfx.leaf[r2 < 0.55 ? 0 : 1], sx - wv / 2, sy - sz / 2, wv, sz, flip < 0, 1e9, fogAt(th, Zw) * 0.6,
+                                  th.fogColor, fade);
+                }
             }
         }
         // rain: long, slanted streaks falling past the camera, and drops bursting on the road ahead

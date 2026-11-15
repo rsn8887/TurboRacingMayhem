@@ -73,6 +73,10 @@ void prepareCarSprites();      // after loading / generating: mipmaps, bounds, p
 
 // draw a car so that its full (uncropped) frame covers x, y, w, h. yawIdx in -(CAR_YAWS-1)..(CAR_YAWS-1)
 // (negative = turned left, mirrored), elevation index, brake lights on/off
+// Night driving (rainy night): the rear lights drawn glowing - bright, barely fogged, with a red halo - so they
+// shine far into the dark; 'fog' is the (reduced) fog to use for them
+void drawCarTailLights(Canvas& cv, int type, Color color, int yawIdx, int elev, double x, double y, double w, double h,
+                       double clipBottom, double fog, Color fogColor, const Bitmap* glow);
 void drawCar(Canvas& cv, int type, Color color, int yawIdx, int elev, bool brake, double x, double y, double w, double h,
              double clipBottom = 1e9, double fog = 0, Color fogColor = 0);
 // the screen positions of its exhaust pipes, for a car drawn with the same arguments (nitrous flames)

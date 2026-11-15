@@ -89,6 +89,28 @@ void drawCar(Canvas& cv, int type, Color color, int yawIdx, int elev, bool brake
         for (const CarFrame& o : cs.brake[a][elev]) drawCarFrame(cv, o, pal, x, y, w, h, flip, clipBottom, fog, fogColor);
 }
 
+void drawCarTailLights(Canvas& cv, int type, Color color, int yawIdx, int elev, double x, double y, double w, double h,
+                       double clipBottom, double fog, Color fogColor, const Bitmap* glow) {
+    const CarSprites& cs = sprites[std::clamp(type, 0, CAR_TYPES - 1)];
+    yawIdx = std::clamp(yawIdx, -(CAR_YAWS - 1), CAR_YAWS - 1);
+    elev = std::clamp(elev, 0, CAR_ELEV - 1);
+    bool flip = yawIdx < 0;
+    int a = std::abs(yawIdx);
+    const Color* pal = palette(color);
+    for (const CarFrame& o : cs.brake[a][elev]) {
+        if (o.bmp.w <= 0) continue;
+        const double kx = w / o.frameW, ky = h / o.frameH;
+        double ox = flip ? o.frameW - o.ox - o.bmp.w * o.scale : o.ox;   // where the lights sit on screen
+        double fx = x + ox * kx, fy = y + o.oy * ky, fw = o.bmp.w * o.scale * kx, fh = o.bmp.h * o.scale * ky;
+        drawCarFrame(cv, o, pal, x, y, w, h, flip, clipBottom, fog, fogColor);
+        if (glow && glow->w > 0) {   // a soft round red glow over each light, bigger relative to the car the further off
+            double gw = std::max(fw * 0.32, 3.0), gh = std::max(fh * 1.8, 3.0);
+            for (double gx : {fx + fw * 0.12, fx + fw * 0.88})
+                cv.blitScaled(*glow, gx - gw / 2, fy + fh / 2 - gh / 2, gw, gh, false, clipBottom, 0.85, rgb(255, 40, 30), 0.85);
+        }
+    }
+}
+
 void carExhausts(int type, int yawIdx, int elev, double x, double y, double w, double h, std::vector<std::array<double, 2>>& out) {
     const CarSprites& cs = sprites[std::clamp(type, 0, CAR_TYPES - 1)];
     yawIdx = std::clamp(yawIdx, -(CAR_YAWS - 1), CAR_YAWS - 1);
