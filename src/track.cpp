@@ -818,8 +818,8 @@ void Track::decorate(unsigned seed) {
             break;
         case 12:  // rainy night city
             if (i % 16 == 0 && !gantry && !sign) add(i, SPR_RAIN_LAMP, (i / 16) % 2 ? 1.35 : -1.35);
-            if (i % 10 == 0) add(i, rnd2(0, 1) < 0.55 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(2.8, 4.5));
-            if (rnd2(0, 1) < 0.05) add(i, rnd2(0, 1) < 0.5 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(5.0, 8.0));
+            if (i % 16 == 0) add(i, rnd2(0, 1) < 0.55 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(2.8, 4.5));
+            if (rnd2(0, 1) < 0.015) add(i, rnd2(0, 1) < 0.5 ? SPR_RAIN_BUILDING1 : SPR_RAIN_BUILDING2, side2() * rnd2(5.0, 8.0));
             if (i % 23 == 11 && !gantry && rnd2(0, 1) < 0.75 && segs[i].surface == SURF_ASPHALT &&
                 std::fabs(segs[i].w1 - 1) < 0.3) {                   // a puddle in the road, three segments long
                 double off = rnd2(-0.7, 0.7);

@@ -1182,13 +1182,19 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
                 bool flip = SPRITE_INFO[si.type].mirrorRight && si.offset > 0;
                 if (!lamps.empty()) flushLampsBehind({sx - dw / 2, p.y1 - dh, sx + dw / 2, p.y1});
                 // street lamps keep shining in the dark distance (their light, not the post, cuts through the murk)
-                double f = si.type == SPR_RAIN_LAMP ? fog * 0.2 : th.rain && si.type == SPR_BRIDGE ? fog * 0.75 : fog;
                 const bool lights = si.type == SPR_RAIN_BUILDING1 || si.type == SPR_RAIN_BUILDING2;
-                if (!(th.rain && f > 0.86))                 // (lost in the dark: not worth drawing)
+                // rainy night: the city sinks into the dark with distance. Buildings fade fully to black between 120
+                // and 200 segments ahead (and are not drawn beyond); their lit windows fade more slowly than the
+                // walls, but on the same curve, so no window ever floats where its wall has gone.
+                double sink = th.rain ? std::clamp((p.z1 / SEG_LEN - 120) / 80, 0.0, 1.0) : 0;
+                if (lights && sink >= 1) continue;
+                double f = si.type == SPR_RAIN_LAMP ? fog * 0.2 : th.rain && si.type == SPR_BRIDGE ? fog * 0.75
+                         : lights ? std::max(fog * 0.9, sink) : fog;
+                if (!(th.rain && f > 0.86) || lights)       // (lost in the dark: not worth drawing)
                     cv.blitScaled(bmp, sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip, f, th.fogColor);
-                if (lights)                                 // lit windows shine at full brightness, near or far
+                if (lights && f > 0.3)                      // the windows glow on as the wall darkens
                     cv.blitScaled(gfx.rainLights[si.type == SPR_RAIN_BUILDING2], sx - dw / 2, p.y1 - dh, dw, dh, flip, p.clip,
-                                  fog * 0.15, th.fogColor);
+                                  std::max(fog * 0.6, sink), th.fogColor);
                 if (si.type == SPR_BRIDGE && dw > 4)        // the deck runs on out to both screen edges
                     for (int sd : {-1, 1})
                         for (double tx = sx - dw / 2 + sd * dw; tx + dw > vp.x && tx < vp.x + vp.w; tx += sd * dw)
@@ -1384,7 +1390,7 @@ void renderView(Canvas& cv, const Rect& vp, const Race& race, int carIndex, cons
         // rain: long, slanted streaks falling past the camera, and drops bursting on the road ahead
         if (th.rain && !car.inTunnel) {
             const double T = race.time + carIndex * 3.1;
-            const int NR = 220;
+            const int NR = 170;
             for (int i = 0; i < NR; ++i) {
                 double r0 = frand(i * 7 + 101), r1 = frand(i * 7 + 102), r2 = frand(i * 7 + 103);
                 double sp = 1.4 + 0.9 * r1;                              // screen heights per second
